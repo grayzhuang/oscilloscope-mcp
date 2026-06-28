@@ -1,0 +1,33 @@
+# RIGOL DS1104Z — 100 MHz, 4-channel digital oscilloscope (DS1000Z series).
+# Used by bench.helpers.caveat_calc to compute observation-limit warnings.
+
+model: RIGOL_DS1104Z
+vendor: RIGOL
+family: DS1000Z
+idn_match: "RIGOL\\s*TECHNOLOGIES\\s*,\\s*DS1104Z"
+# Shared DS1000Z trigger schema (types + per-type parameter specs).
+includes: [_ds1000z_family.yaml]
+transport:
+  kind: scpi_lan
+  default_port: 5555
+
+capability:
+  analog_bw_hz: 100.0e6
+  channels: 4
+  sample_rate_mode_dependent:
+    "1": 1.0e9
+    "2": 500.0e6
+    "4": 250.0e6
+  memory_depth_pts_total: 24.0e6
+  input_impedance_ohm: 1.0e6
+  trigger_jitter_min_ns_per_sample_period: 1.0
+  # Trigger schema (types + per-type parameter specs) is shared across the
+  # DS1000Z family — see `includes: _ds1000z_family.yaml` above.
+  protocol_decode: [RS232, I2C, SPI, Parallel]
+  screenshot_formats: [PNG, BMP]
+  display_pixel_width: 800
+  display_pixel_height: 480
+
+notes:
+  - "Stock 10:1 passive probe ≈ 10 pF capacitance — derate edge-timing on fast nodes."
+  - "Protocol decode is a separately licensed option on some firmware revisions."

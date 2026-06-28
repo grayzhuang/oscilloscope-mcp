@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/settings.json
+.idea/
+
+# Runtime artifacts (test screenshots etc.)
+runs/
+*.png
+*.bmp
+!docs/**/*.png
+!docs/**/*.bmp
+.claude/
