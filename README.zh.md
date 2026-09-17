@@ -131,6 +131,43 @@ claude mcp add --scope user oscilloscope \
   跳过每次工具调用前的端口探测 + `*IDN?` 自动识别往返。全部变量
   见[环境变量](#环境变量)一节。
 
+**工作台上有多台示波器时**：每台仪器注册一个条目，让条目名承载仪器
+身份。按下方的双条目配置，触发调用会是
+`mcp__scope-rigol__scope_trigger` 或 `mcp__scope-zds__scope_trigger`，
+仅凭前缀就能让用户和 agent 确认命令会到达哪台仪器，采集不会静默
+落到旁边那台示波器上。
+
+```json
+{
+  "mcpServers": {
+    "scope-rigol": {
+      "command": "<专用环境 python 的绝对路径>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.42",
+        "SCOPE_MCP_PORT": "5555",
+        "SCOPE_MCP_MODEL": "RIGOL_DS1104Z"
+      }
+    },
+    "scope-zds": {
+      "command": "<专用环境 python 的绝对路径>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.43",
+        "SCOPE_MCP_PORT": "5025",
+        "SCOPE_MCP_MODEL": "ZLG_ZDS1104"
+      }
+    }
+  }
+}
+```
+
+只是偶尔用一下的第二台仪器，也可以共用单个条目：所有工具都接受可选
+的 `host` / `port` / `model` 参数，仅对该次调用覆盖注册时的 env（三项
+全部传入即可跳过自动识别往返）。常用仪器仍建议一台一条目——单条目
+配置下，省略 `host` 的调用永远打到默认那台示波器，想操作另一台就得
+每次都记得传参。
+
 之后，连接到该 MCP 服务器的任何会话都可以使用 `scope_query`、`scope_screenshot`、
 `scope_trigger`、`scope_measure`、`scope_measure_stat`、`scope_channel`、
 `scope_timebase`、`scope_waveform`、`scope_acquire`、`scope_capture`、

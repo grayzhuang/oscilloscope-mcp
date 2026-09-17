@@ -58,4 +58,4 @@ src/oscilloscope_mcp/
 
 - 源码 docstring 里残留 `bench/README.md`、`CLAUDE.md §利用想定` 的引用，是项目改名前的遗留，这两个文件已不存在。
 - `docs/references/`（未入库）存放厂商编程手册（如 ZLG ZDS1000），为后续新增驱动准备的参考资料，勿删除。
-- README.md / README.ja.md 是公开项目门面；改工具签名或行为时同步 README 的 “Tools exposed” 表。
+- README 有三个语言版本（`README.md` 英 / `README.zh.md` 中 / `README.ja.md` 日），是公开项目门面；改工具签名或行为时三个版本同步改（含 “Tools exposed” 表）。

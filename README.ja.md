@@ -129,6 +129,45 @@ claude mcp add --scope user oscilloscope \
   呼び出しのたびに行われるポート探索 + `*IDN?` 自動判識の往復を
   省略できます。変数の一覧は[環境変数](#環境変数)を参照。
 
+**ベンチ上にオシロが複数台ある場合**は台数分のエントリを登録し、
+エントリ名に計測器の識別情報を持たせます。下の 2 エントリ構成では
+トリガ設定は `mcp__scope-rigol__scope_trigger` または
+`mcp__scope-zds__scope_trigger` として呼ばれるため、プレフィックス
+だけで——エージェントにとっても——コマンドがどの計測器に届くかが
+分かり、隣のオシロを黙って叩いてしまうことがありません。
+
+```json
+{
+  "mcpServers": {
+    "scope-rigol": {
+      "command": "<専用環境の python への絶対パス>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.42",
+        "SCOPE_MCP_PORT": "5555",
+        "SCOPE_MCP_MODEL": "RIGOL_DS1104Z"
+      }
+    },
+    "scope-zds": {
+      "command": "<専用環境の python への絶対パス>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.43",
+        "SCOPE_MCP_PORT": "5025",
+        "SCOPE_MCP_MODEL": "ZLG_ZDS1104"
+      }
+    }
+  }
+}
+```
+
+たまに使うだけの 2 台目なら、エントリ 1 つのままでも運用できます。
+全ツールはオプション引数 `host` / `port` / `model` を受け付け、その
+呼び出しに限って登録 env を上書きします（3 点すべて渡せば自動判識の
+往復も省略）。常用する計測器にはエントリ分離を推奨します——1
+エントリ構成では `host` を省略した呼び出しは常にデフォルトのオシロに
+向かい、もう一方を叩くには毎回引数を指定し続ける必要があるためです。
+
 これで、このMCPサーバーに接続したセッションから
 `scope_query` / `scope_screenshot` / `scope_trigger` / `scope_measure` /
 `scope_measure_stat` / `scope_channel` / `scope_timebase` / `scope_waveform` /

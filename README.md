@@ -145,6 +145,46 @@ most MCP hosts (Claude Code, Cursor, …) pick up:
   before every tool call. See [Environment](#environment) for all
   variables.
 
+**Several scopes on one bench**: register one entry per instrument and
+let the entry name carry the identity. With the two entries below, a
+trigger call is `mcp__scope-rigol__scope_trigger` or
+`mcp__scope-zds__scope_trigger`, so the prefix alone tells you — and the
+agent — which instrument the command will reach; a capture cannot
+silently land on the scope next to it.
+
+```json
+{
+  "mcpServers": {
+    "scope-rigol": {
+      "command": "<absolute path to the dedicated env's python>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.42",
+        "SCOPE_MCP_PORT": "5555",
+        "SCOPE_MCP_MODEL": "RIGOL_DS1104Z"
+      }
+    },
+    "scope-zds": {
+      "command": "<absolute path to the dedicated env's python>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.43",
+        "SCOPE_MCP_PORT": "5025",
+        "SCOPE_MCP_MODEL": "ZLG_ZDS1104"
+      }
+    }
+  }
+}
+```
+
+A second instrument you only touch occasionally can also ride on a
+single entry: every tool accepts optional `host` / `port` / `model`
+arguments that override the registration env for that one call (pass
+all three to skip the auto-detect round-trip). Prefer one entry per
+instrument for regular use — with a single entry, any call that omits
+`host` goes to the default scope, so reaching the other one depends on
+passing the arguments every time.
+
 Then the `scope_query`, `scope_screenshot`, `scope_trigger`,
 `scope_measure`, `scope_measure_stat`, `scope_channel`, `scope_timebase`,
 `scope_waveform`, `scope_acquire`, `scope_capture`, `scope_compare`,
