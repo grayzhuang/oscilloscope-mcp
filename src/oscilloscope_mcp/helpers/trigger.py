@@ -304,7 +304,7 @@ def _format_param(
     if kind == "pattern":
         return _format_pattern(name, spec, value)
     if kind == "chan_level":
-        return _format_chan_level(profile, name, value)
+        return _format_chan_level(profile, name, spec, value)
     raise TriggerValidationError(f"parameter {name!r} has unknown kind {kind!r}")
 
 
@@ -315,9 +315,13 @@ def _channels(profile: dict[str, Any]) -> int:
 def _format_source(
     profile: dict[str, Any], spec: dict[str, Any], value: Any
 ) -> str:
-    """A bare number or CHAN<n> → ``CHAN<n>`` (n bounded by channel count);
-    a named source (e.g. AC) must be listed in the spec's ``named``. Digital
-    (D0–D15) and unknown sources are rejected — these are analog scopes.
+    """A bare number or CHAN<n> → the vendor's channel-source spelling
+    (n bounded by channel count); a named source (e.g. AC) must be
+    listed in the spec's ``named``. Digital (D0–D15) and unknown
+    sources are rejected — these are analog scopes. Vendors spell
+    channel sources differently (RIGOL ``CHAN<n>``, ZLG triggers
+    ``CH<n>``); the param spec's ``chan_format`` picks the template
+    (default ``CHAN{n}``).
     """
     s = str(value).strip().upper()
     m = re.fullmatch(r"(?:CHAN(?:NEL)?)?([0-9]+)", s)
@@ -328,7 +332,7 @@ def _format_source(
             raise TriggerValidationError(
                 f"source channel {n} out of range (1..{ch})"
             )
-        return f"CHAN{n}"
+        return str(spec.get("chan_format", "CHAN{n}")).format(n=n)
     named = [str(x).upper() for x in spec.get("named", [])]
     if s in named:
         return s
@@ -425,8 +429,11 @@ def _format_pattern(name: str, spec: dict[str, Any], value: Any) -> str:
     return ",".join(out)
 
 
-def _format_chan_level(profile: dict[str, Any], name: str, value: Any) -> str:
-    """``<CHANn>,<level>`` for per-channel level commands (PATTern:LEVel)."""
+def _format_chan_level(
+    profile: dict[str, Any], name: str, spec: dict[str, Any], value: Any
+) -> str:
+    """``<CHANn>,<level>`` for per-channel level commands (PATTern:LEVel).
+    The channel half honors the spec's ``chan_format`` like any source."""
     if isinstance(value, (list, tuple)) and len(value) == 2:
         chan, lvl = value
     elif isinstance(value, str) and "," in value:
@@ -435,7 +442,7 @@ def _format_chan_level(profile: dict[str, Any], name: str, value: Any) -> str:
         raise TriggerValidationError(
             f"{name} must be '<CHANn>,<level>' or [channel, level]"
         )
-    chan_fmt = _format_source(profile, {}, chan)
+    chan_fmt = _format_source(profile, spec, chan)
     try:
         lvl_f = float(lvl)
     except (TypeError, ValueError):

@@ -74,11 +74,20 @@ def test_idn_matches_profile_regex(scope) -> None:
     )
 
 
+def _status_query_for(profile) -> tuple[str, set[str]]:
+    """The family's run/trigger status query and its allowed responses
+    (RIGOL: :TRIG:STAT?; ZDS1000: :GLOBal:RUN:STATe? → Run/Single/Stop)."""
+    if profile.get("family") == "ZDS1000":
+        return ":GLOBal:RUN:STATe?", {"RUN", "SINGLE", "STOP"}
+    return ":TRIG:STAT?", {"TD", "WAIT", "RUN", "AUTO", "STOP", "FIN"}
+
+
 def test_query_raw_round_trip(scope) -> None:
     """``query_raw`` must work for both queries (?-bearing) and writes."""
-    # Query path.
-    trig_state = scope.query_raw(":TRIG:STAT?")
-    assert trig_state.upper() in {"TD", "WAIT", "RUN", "AUTO", "STOP", "FIN"}
+    # Query path (status query is family-specific).
+    status_query, expected = _status_query_for(scope.profile)
+    trig_state = scope.query_raw(status_query)
+    assert trig_state.upper() in expected
     # Write path — :STOP is harmless and idempotent.
     assert scope.query_raw(":STOP") == ""
 
@@ -93,22 +102,29 @@ def test_timebase_is_positive(scope) -> None:
     assert scope.timebase_s_per_div() > 0
 
 
-def test_screenshot_returns_nonempty_png(tmp_path, scope) -> None:
-    """End-to-end: dump a PNG, verify it has the PNG magic bytes."""
-    result = scope.screenshot(ScreenshotPlan(image_format="PNG"))
-    assert result.image_format == "PNG"
-    assert len(result.image_bytes) > 1024, "PNG suspiciously small"
-    assert result.image_bytes.startswith(b"\x89PNG\r\n\x1a\n"), (
-        f"PNG magic missing; first 16 bytes = {result.image_bytes[:16]!r}"
+def test_screenshot_returns_nonempty_image(tmp_path, scope) -> None:
+    """End-to-end: dump a screenshot in the profile's primary format and
+    verify its magic bytes (RIGOL: PNG; ZDS1000: BMP only)."""
+    fmts = [
+        str(f).upper()
+        for f in scope.profile["capability"].get("screenshot_formats", ["PNG"])
+    ] or ["PNG"]
+    fmt = fmts[0]
+    magic = {"PNG": b"\x89PNG\r\n\x1a\n", "BMP": b"BM"}[fmt]
+    result = scope.screenshot(ScreenshotPlan(image_format=fmt))
+    assert result.image_format == fmt
+    assert len(result.image_bytes) > 1024, "screenshot suspiciously small"
+    assert result.image_bytes.startswith(magic), (
+        f"{fmt} magic missing; first 16 bytes = {result.image_bytes[:16]!r}"
     )
     # Persist for human review so the operator can verify visually.
-    out = tmp_path / f"conformance_{scope.profile['model']}.png"
+    out = tmp_path / f"conformance_{scope.profile['model']}.{fmt.lower()}"
     out.write_bytes(result.image_bytes)
 
 
 def test_screenshot_with_cursor_and_label(tmp_path, scope) -> None:
     """Verify cursor + channel-label annotation makes it onto the
-    screen. We don't OCR the PNG; instead we check the SCPI sequence
+    screen. We don't OCR the image; instead we check the SCPI sequence
     completes without error and the result echoes the applied state.
     """
     from oscilloscope_mcp.instruments._base import CursorPair
@@ -121,7 +137,11 @@ def test_screenshot_with_cursor_and_label(tmp_path, scope) -> None:
         display_labels=True,
     )
     result = scope.screenshot(plan)
-    assert result.channel_labels_applied.get(1) == "CH1_TEST"
+    if scope.profile["capability"].get("channel_labels", True):
+        assert result.channel_labels_applied.get(1) == "CH1_TEST"
+    else:
+        # ZDS1000 has no channel-label SCPI — nothing may be claimed applied.
+        assert result.channel_labels_applied == {}
     assert len(result.cursors_set) == 1
     assert result.cursors_set[0].label == "span"
 
@@ -258,23 +278,27 @@ def test_all_trigger_types_round_trip_then_restore(scope) -> None:
 
 
 def test_run_control_actions_then_restore(scope) -> None:
-    """Issue each run/arm control action on real hardware and confirm the
-    trigger status stays within the profile's allowed set; restore the
-    original run/stop state afterward.
+    """Issue each declared run/arm control action on real hardware and
+    confirm the trigger status stays within the profile's allowed set;
+    restore the original run/stop state afterward.
     """
     trig = scope.profile["capability"]["trigger"]
     allowed = {s.upper() for s in trig["status_values"]} | {"FIN"}
+    declared = set(trig.get("run_control", {}))
     orig_status = (scope.get_trigger().status or "STOP").upper()
-    running = {"RUN", "AUTO", "TD", "WAIT"}
+    # Everything except a hard stop counts as "acquiring" (RIGOL:
+    # TD/WAIT/RUN/AUTO; ZDS1000: Run/Single).
+    running = allowed - {"STOP"}
     try:
-        # STOP must report STOP; RUN must leave a running status (the
-        # driver settles for the ~0.2 s :TRIG:STAT? lag, so this is stable).
+        # STOP must report STOP; RUN must leave an acquiring status (the
+        # driver settles for the status-query lag, so this is stable).
         assert scope.run_control("STOP") == "STOP"
         assert (scope.get_trigger().status or "").upper() == "STOP"
         assert scope.run_control("RUN") == "RUN"
         assert (scope.get_trigger().status or "").upper() in running
-        # SINGLE / FORCE just have to keep the status within the allowed set.
-        for action in ("SINGLE", "FORCE"):
+        # Every other declared action (SINGLE / FORCE where available)
+        # just has to keep the status within the allowed set.
+        for action in sorted(declared - {"RUN", "STOP"}):
             assert scope.run_control(action) == action
             status = scope.get_trigger().status
             if status is not None:
@@ -515,9 +539,15 @@ def test_scope_capture_single_shot_edge_trigger(scope) -> None:
     from oscilloscope_mcp.helpers.edges import edges_from_runs
     from oscilloscope_mcp.instruments._base import TriggerSetup
 
-    # Ensure edge trigger on CHAN1 is set up
+    # Ensure edge trigger on CHAN1 is set up. SINGLE as a *sweep* only
+    # exists on families that declare it (ZDS1000: SINGLE is a run action).
+    sweep_modes = {
+        str(s).upper()
+        for s in scope.profile["capability"]["trigger"]["sweep_modes"]
+    }
+    sweep = "SINGLE" if "SINGLE" in sweep_modes else "AUTO"
     scope.set_trigger(TriggerSetup(
-        mode="EDGE", sweep="SINGLE",
+        mode="EDGE", sweep=sweep,
         params={"source": "CHAN1", "slope": "POS"},
     ))
 

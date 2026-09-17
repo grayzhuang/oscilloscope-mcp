@@ -1,0 +1,235 @@
+# Shared ZDS1000-series capability — included by every ZLG ZDS1000
+# model profile via `includes:` (mirrors `_ds1000z_family.yaml`), so the
+# (identical) instruction set is declared once per family.
+#
+# Source: ZLG ZDS1000 Series Programming Manual UM01010101 V1.03
+# (distilled in docs/references/ZLG/ZDS1000_pm.md). Hardware specs
+# (bandwidth, max sample rate) are NOT in the programming manual and
+# live in the per-model profiles.
+#
+# Vendor quirks captured here (vs the RIGOL DS1000Z family):
+#   - trigger sources are spelled CH<n>, so trigger source params carry
+#     `chan_format: "CH{n}"` (measurement/multichannel sources stay
+#     CHANnel<n>)
+#   - SINGLE is a run-control action (:SINGle), NOT a sweep mode
+#   - measurement items are queried per-item (:MEASure:VPP? <src>), so
+#     each item's `scpi` is the full node name
+#   - statistics sub-node spellings differ from RIGOL
+#     (MAXImum/MINImum/AVERage vs MAXimum/MINimum/AVERages)
+#   - probe ratios must be written as integer literals (10, not 10.0)
+
+capability:
+  # Automatic measurement items for :MEASure:<ITEM>? <src>[,<src2>].
+  # Source: ZDS1000 programming manual §13 (:MEASure:*).
+  measure:
+    items:
+      # --- voltage / amplitude (single source) ---
+      VMAX:      {scpi: VMAX, unit: V}
+      VMIN:      {scpi: VMIN, unit: V}
+      VPP:       {scpi: VPP, unit: V}
+      VTOP:      {scpi: VTOP, unit: V}
+      VBASE:     {scpi: VBASe, unit: V}
+      VAMP:      {scpi: VAMP, unit: V}
+      VMEAN:     {scpi: VMEAn, unit: V}
+      OVERSHOOT: {scpi: ROVErshoot, unit: ratio}
+      PRESHOOT:  {scpi: RPREshoot, unit: ratio}
+      # --- timing (single source) ---
+      PERIOD:    {scpi: PERiod, unit: s}
+      FREQUENCY: {scpi: FREQuency, unit: Hz}
+      RTIME:     {scpi: RISetime, unit: s}
+      FTIME:     {scpi: FALLtime, unit: s}
+      PWIDTH:    {scpi: PWIDth, unit: s}
+      NWIDTH:    {scpi: NWIDth, unit: s}
+      PDUTY:     {scpi: PDUTy, unit: ratio}
+      NDUTY:     {scpi: NDUTy, unit: ratio}
+      # --- two-source delay / phase (require source + source2) ---
+      RDELAY:    {scpi: RRDelay, unit: s, dual_source: true}
+      FDELAY:    {scpi: FFDelay, unit: s, dual_source: true}
+      RPHASE:    {scpi: RPHase, unit: deg, dual_source: true}
+      FPHASE:    {scpi: FPHase, unit: deg, dual_source: true}
+      # Multi-parameter items (VRMS <couple>,<interval>,<src> / VAVG
+      # <interval>,<src> / PULSetrain) are not declared yet — the typed
+      # measure interface has no way to pass their extra arguments.
+    statistics:
+      # :MEASure:<ITEM>:<STAT>? <src> — spellings per manual §13.
+      stat_types: [CURRent, MAXImum, MINImum, AVERage, DEViation, COUNt]
+      modes: []    # ZDS1000 exposes no statistics mode switch
+  # Vertical (channel) + horizontal (timebase) acquisition setup.
+  # Source: ZDS1000 programming manual §7 (:CHANnel) / §15 (:TIMebase).
+  acquisition:
+    channel:
+      coupling_modes: [AC, DC, GND]
+      # Voltage-probe attenuation ladder (manual §7); the current-probe
+      # ladder (10 … 0.001) is not declared — current probing is not
+      # wired up yet.
+      probe_ratios: [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+      bw_limit_values: [20M, "OFF"]
+      units: [VOLTage, AMPere]
+      # Base range 2 mV–5 V/div scales with probe attenuation (manual
+      # §7); the upper bound assumes a 10x probe (50 V/div).
+      scale_v_per_div: {min: 2.0e-3, max: 50.0}
+      offset_v: {min: -40.0, max: 40.0}
+    timebase:
+      modes: [MAIN, XY, ROLL]
+      scale_s_per_div: {min: 1.0e-9, max: 50.0}
+      offset_s: {min: -100.0, max: 100.0}
+    acquire:
+      types: [NORMal, PEAK, AVERages, HRESolution]
+      averages: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
+      # Memory ladder is channel-count independent on ZDS1000 (manual
+      # §5) — the same list applies to every active-channel bucket.
+      memory_depth:
+        "1": [AUTO, 1400, 14000, 140000, 700000, 1400000, 7000000, 14000000, 28000000]
+        "2": [AUTO, 1400, 14000, 140000, 700000, 1400000, 7000000, 14000000, 28000000]
+        "4": [AUTO, 1400, 14000, 140000, 700000, 1400000, 7000000, 14000000, 28000000]
+  trigger:
+    sweep_modes: [AUTO, NORMAL]            # :TRIGger:SWEep (SINGLE is a run action)
+    coupling_modes: [AC, DC, LFReject, HFReject]   # :TRIGger:COUPling
+    status_values: [Run, Single, Stop]     # :GLOBal:RUN:STATe?
+    # Run/arm control (root commands, equivalent to the front-panel
+    # RUN-STOP / SINGLE keys). action -> SCPI.
+    run_control:
+      RUN: ":RUN"          # start continuous acquisition
+      STOP: ":STOP"        # stop acquisition
+      SINGLE: ":SINGle"    # arm a single acquisition
+      # FORCE: no :TFORce on ZDS1000. The front-panel Force key (value
+      # 133 via :KEY) is the documented equivalent, but its
+      # press/release semantics are unspecified — pending real-machine
+      # verification before registration.
+    types:
+      - keyword: EDGE
+        query: EDGE
+        subsystem: ":TRIGger:EDGE"
+        option: false
+        params:
+          source:  {scpi: SOURce, kind: source, chan_format: "CH{n}", named: [LINE, EXTernal]}
+          slope:   {scpi: SLOPe, kind: enum, values: [POSitive, NEGative, EITHer]}
+          level_v: {scpi: LEVel, kind: real, unit: V}
+
+      - keyword: PULSe
+        query: PULS
+        subsystem: ":TRIGger:PULSe"
+        option: false
+        params:
+          source:        {scpi: SOURce, kind: source, chan_format: "CH{n}", named: [LINE, EXTernal]}
+          when:          {scpi: WHEN, kind: enum, values: [PGReater, PLESs, PGLess, NGReater, NLESs, NGLess]}
+          width_upper_s: {scpi: UWIDth, kind: real, min: 1.0e-9, max: 1, unit: s}
+          width_lower_s: {scpi: LWIDth, kind: real, min: 1.0e-9, max: 1, unit: s}
+          level_v:       {scpi: LEVel, kind: real, unit: V}
+
+      - keyword: SLOPe
+        query: SLOP
+        subsystem: ":TRIGger:SLOPe"
+        option: false
+        params:
+          source:        {scpi: SOURce, kind: source, chan_format: "CH{n}"}
+          when:          {scpi: WHEN, kind: enum, values: [PGReater, PLESs, PGLess, NGReater, NLESs, NGLess]}
+          time_upper_s:  {scpi: TUPPer, kind: real, min: 1.0e-9, max: 1, unit: s}
+          time_lower_s:  {scpi: TLOWer, kind: real, min: 1.0e-9, max: 1, unit: s}
+          window:        {scpi: WINDow, kind: enum, values: [TA, TB, TAB]}
+          level_a_v:     {scpi: HLEVel, kind: real, unit: V}
+          level_b_v:     {scpi: LLEVel, kind: real, unit: V}
+
+      - keyword: VIDeo
+        query: VID
+        subsystem: ":TRIGger:VIDEo"
+        option: false
+        params:
+          source:    {scpi: SOURce, kind: source, chan_format: "CH{n}"}
+          polarity:  {scpi: POLArity, kind: enum, values: [POSitive, NEGative]}
+          standard:  {scpi: STANdard, kind: enum, values: [NTSC, PAL, SECAM]}
+          mode:      {scpi: SLOPe, kind: enum, values: [ANYLine, GOTOline, ANYFiled, EVENfield, ODDField]}
+          line:      {scpi: LINE, kind: int, min: 1}
+          level_v:   {scpi: LEVel, kind: real, unit: V}
+
+      - keyword: RUNT
+        query: RUNT
+        subsystem: ":TRIGger:RUNT"
+        option: false
+        params:
+          source:        {scpi: SOURce, kind: source, chan_format: "CH{n}"}
+          slope:         {scpi: SLOPe, kind: enum, values: [POSitive, NEGative, EITHer]}
+          when:          {scpi: WHEN, kind: enum, values: [NONE, GREater, LESS, INRange]}
+          time_upper_s:  {scpi: TUPPer, kind: real, min: 2.0e-9, max: 1, unit: s}
+          time_lower_s:  {scpi: TLOWer, kind: real, min: 2.0e-9, max: 1, unit: s}
+          window:        {scpi: WINDow, kind: enum, values: [TA, TB, TAB]}
+          level_a_v:     {scpi: HLEVel, kind: real, unit: V}
+          level_b_v:     {scpi: LLEVel, kind: real, unit: V}
+
+      - keyword: PRUNt
+        query: PRUN
+        subsystem: ":TRIGger:PRUNt"
+        option: false
+        params:
+          source:        {scpi: SOURce, kind: source, chan_format: "CH{n}"}
+          slope:         {scpi: SLOPe, kind: enum, values: [POSitive, NEGative, EITHer]}
+          when:          {scpi: WHEN, kind: enum, values: [NONE, GREater, LESS, INRange]}
+          time_upper_s:  {scpi: TUPPer, kind: real, min: 8.0e-9, max: 1, unit: s}
+          time_lower_s:  {scpi: TLOWer, kind: real, min: 8.0e-9, max: 1, unit: s}
+          window:        {scpi: WINDow, kind: enum, values: [TA, TB, TAB]}
+          level_a_v:     {scpi: HLEVel, kind: real, unit: V}
+          level_b_v:     {scpi: LLEVel, kind: real, unit: V}
+
+      - keyword: PATTern
+        query: PATT
+        subsystem: ":TRIGger:PATTern"
+        option: false
+        params:
+          source_a:      {scpi: ASRc, kind: source, chan_format: "CH{n}"}
+          source_b:      {scpi: BSRc, kind: source, chan_format: "CH{n}"}
+          pattern_a:     {scpi: APat, kind: enum, values: [H, L, X, R, F]}
+          pattern_b:     {scpi: BPat, kind: enum, values: [H, L, X, R, F]}
+          when:          {scpi: WHEN, kind: enum, values: [NONE, GREater, LESS, INRange, OUTRange]}
+          time_upper_s:  {scpi: TUPPer, kind: real, min: 5.0e-9, max: 1, unit: s}
+          time_lower_s:  {scpi: TLOWer, kind: real, min: 4.0e-9, max: 1, unit: s}
+          level:         {scpi: LEVel, kind: chan_level, chan_format: "CH{n}", unit: V}
+
+      - keyword: NEDGe
+        query: NEDG
+        subsystem: ":TRIGger:NEDGe"
+        option: false
+        params:
+          source:   {scpi: SOURce, kind: source, chan_format: "CH{n}"}
+          slope:    {scpi: SLOPe, kind: enum, values: [POSitive, NEGative]}
+          nth_edge: {scpi: EDGEnum, kind: int, min: 1, max: 65535}
+          idle_s:   {scpi: IDLE, kind: real, min: 1.0e-8, max: 1, unit: s}
+          level_v:  {scpi: LEVel, kind: real, unit: V}
+
+      - keyword: DELay
+        query: DEL
+        subsystem: ":TRIGger:DELay"
+        option: false
+        params:
+          source_a:      {scpi: ASRc, kind: source, chan_format: "CH{n}"}
+          source_b:      {scpi: BSRc, kind: source, chan_format: "CH{n}"}
+          slope:         {scpi: SLOPe, kind: enum, values: [RTOR, RTOF, FTOR, FTOF]}
+          when:          {scpi: WHEN, kind: enum, values: [GREater, LESS, INRange]}
+          time_upper_s:  {scpi: TUPPer, kind: real, min: 1.0e-9, max: 1, unit: s}
+          time_lower_s:  {scpi: TLOWer, kind: real, min: 1.0e-9, max: 1, unit: s}
+          level:         {scpi: LEVel, kind: chan_level, chan_format: "CH{n}", unit: V}
+
+      - keyword: TIMeout
+        query: TIM
+        subsystem: ":TRIGger:TIMeout"
+        option: false
+        params:
+          source:  {scpi: SOURce, kind: source, chan_format: "CH{n}"}
+          slope:   {scpi: SLOPe, kind: enum, values: [POSitive, NEGative, EITHer]}
+          time_s:  {scpi: TIMe, kind: real, min: 8.0e-9, max: 4, unit: s}
+          level_v: {scpi: LEVel, kind: real, unit: V}
+
+      - keyword: SHOLd
+        query: SHOL
+        subsystem: ":TRIGger:SHOLd"
+        option: false
+        params:
+          # Manual §16 maps :DSrc → clock and :CSrc → data (yes, the
+          # prefixes read backwards — kept as documented).
+          clock_source:  {scpi: DSrc, kind: source, chan_format: "CH{n}"}
+          data_source:   {scpi: CSrc, kind: source, chan_format: "CH{n}"}
+          slope:         {scpi: SLOPe, kind: enum, values: [POSitive, NEGative]}
+          pattern:       {scpi: PATTern, kind: enum, values: [H, L]}
+          type:          {scpi: TYPe, kind: enum, values: [SETup, HOLd]}
+          setup_time_s:  {scpi: STIMe, kind: real, min: 2.0e-9, max: 1, unit: s}
+          hold_time_s:   {scpi: HTIMe, kind: real, min: 2.0e-9, max: 1, unit: s}
+          level:         {scpi: LEVel, kind: chan_level, chan_format: "CH{n}", unit: V}

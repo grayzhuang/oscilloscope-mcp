@@ -15,6 +15,7 @@ from oscilloscope_mcp.instruments import (
     open_scope,
     resolve_host_port_from_env,
 )
+from oscilloscope_mcp.transport.scpi_lan import ScpiError
 
 
 @pytest.fixture(autouse=True)
@@ -33,10 +34,12 @@ def test_resolve_host_port_requires_host(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_resolve_host_port_default_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset SCOPE_MCP_PORT now resolves to None — the caller falls
+    back to the profile's transport.default_port (or probes)."""
     monkeypatch.setenv("SCOPE_MCP_HOST", "10.0.0.5")
     host, port = resolve_host_port_from_env()
     assert host == "10.0.0.5"
-    assert port == 5555
+    assert port is None
 
 
 def test_resolve_host_port_explicit_port(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,6 +65,64 @@ def test_open_scope_unknown_model_raises(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("SCOPE_MCP_HOST", "127.0.0.1")
     with pytest.raises(ScopeDispatchError, match="not in MODEL_REGISTRY"):
         open_scope(model="UNKNOWN_BRAND_99")
+
+
+def test_open_scope_uses_profile_default_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no port configured and the model known, the transport lands
+    on the model profile's transport.default_port (RIGOL 5555, ZLG 5025)
+    — no probing needed because the model is resolved up front."""
+    monkeypatch.setenv("SCOPE_MCP_HOST", "127.0.0.1")
+
+    class _StubTransport:
+        def __init__(self, **kw: object) -> None:
+            self.__dict__.update(kw)
+
+        def query(self, cmd: str) -> str:
+            return "stub"
+
+    monkeypatch.setattr(instruments, "ScpiLan", lambda **kw: _StubTransport(**kw))
+    rigol = open_scope(model="RIGOL_DS1104Z")
+    assert rigol.transport.port == 5555
+    zlg = open_scope(model="ZLG_ZDS1104")
+    assert zlg.transport.port == 5025
+
+
+def test_open_scope_explicit_port_beats_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SCOPE_MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SCOPE_MCP_PORT", "5556")
+
+    class _StubTransport:
+        def __init__(self, **kw: object) -> None:
+            self.__dict__.update(kw)
+
+        def query(self, cmd: str) -> str:
+            return "stub"
+
+    monkeypatch.setattr(instruments, "ScpiLan", lambda **kw: _StubTransport(**kw))
+    scope = open_scope(model="ZLG_ZDS1104")
+    assert scope.transport.port == 5556
+
+
+def test_open_scope_probes_ports_for_auto_detect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auto-detect needs a live connection before the profile is known;
+    with no port configured, the common SCPI ports are probed and the
+    first one that answers *IDN? wins."""
+    monkeypatch.setenv("SCOPE_MCP_HOST", "127.0.0.1")
+
+    class _StubTransport:
+        def __init__(self, **kw: object) -> None:
+            self.__dict__.update(kw)
+
+        def query(self, cmd: str) -> str:
+            assert cmd == "*IDN?"
+            if self.port == 5555:
+                raise ScpiError("connection refused (probe)")
+            return "ZHIYUANELECT,ZDS1104,SN0001,V1.0,1.0.0"
+
+    monkeypatch.setattr(instruments, "ScpiLan", lambda **kw: _StubTransport(**kw))
+    scope = open_scope()
+    assert scope.profile["model"] == "ZLG_ZDS1104"
+    assert scope.transport.port == 5025
 
 
 def test_auto_detect_matches_idn_to_profile(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,51 +172,89 @@ def test_profile_yaml_loads_for_each_registered_model() -> None:
         assert "capability" in profile, f"{filename} missing capability"
 
 
-# The complete set of trigger types the DS1000Z instruction set accepts,
-# per RIGOL MSO1000Z/DS1000Z Programming Guide (§2, :TRIGger:MODE). The
-# 6 standard types are always available; the 9 marked option-licensed
-# require the advanced-trigger bundle. (keyword, query, option).
-_DS1000Z_TRIGGER_TYPES = {
-    ("EDGE", "EDGE", False),
-    ("PULSe", "PULS", False),
-    ("SLOPe", "SLOP", False),
-    ("VIDeo", "VID", False),
-    ("PATTern", "PATT", False),
-    ("DURation", "DUR", False),
-    ("TIMeout", "TIM", True),
-    ("RUNT", "RUNT", True),
-    ("WIND", "WIND", True),
-    ("DELay", "DEL", True),
-    ("SHOLd", "SHOL", True),
-    ("NEDG", "NEDG", True),
-    ("RS232", "RS232", True),
-    ("IIC", "IIC", True),
-    ("SPI", "SPI", True),
+# Per-family trigger inventories, each from its vendor's programming
+# guide. RIGOL: MSO1000Z/DS1000Z §2 (6 standard + 9 option-licensed).
+# ZLG: ZDS1000 manual §16 (11 types, none option-licensed).
+# (keyword, query, option).
+_FAMILY_TRIGGER_TYPES = {
+    "DS1000Z": {
+        ("EDGE", "EDGE", False),
+        ("PULSe", "PULS", False),
+        ("SLOPe", "SLOP", False),
+        ("VIDeo", "VID", False),
+        ("PATTern", "PATT", False),
+        ("DURation", "DUR", False),
+        ("TIMeout", "TIM", True),
+        ("RUNT", "RUNT", True),
+        ("WIND", "WIND", True),
+        ("DELay", "DEL", True),
+        ("SHOLd", "SHOL", True),
+        ("NEDG", "NEDG", True),
+        ("RS232", "RS232", True),
+        ("IIC", "IIC", True),
+        ("SPI", "SPI", True),
+    },
+    "ZDS1000": {
+        ("EDGE", "EDGE", False),
+        ("PULSe", "PULS", False),
+        ("SLOPe", "SLOP", False),
+        ("VIDeo", "VID", False),
+        ("RUNT", "RUNT", False),
+        ("PRUNt", "PRUN", False),
+        ("PATTern", "PATT", False),
+        ("NEDGe", "NEDG", False),
+        ("DELay", "DEL", False),
+        ("TIMeout", "TIM", False),
+        ("SHOLd", "SHOL", False),
+    },
+}
+
+# Per-family sweep/status/run-control expectations. ZDS1000 quirks:
+# SINGLE is a run action (not a sweep mode), status comes from
+# :GLOBal:RUN:STATe?, and FORCE has no SCPI equivalent yet.
+_FAMILY_TRIGGER_META = {
+    "DS1000Z": {
+        "sweep_modes": ["AUTO", "NORMAL", "SINGLE"],
+        "status_values": {"TD", "WAIT", "RUN", "AUTO", "STOP"},
+        "run_control": {"RUN", "STOP", "SINGLE", "FORCE"},
+    },
+    "ZDS1000": {
+        "sweep_modes": ["AUTO", "NORMAL"],
+        "status_values": {"Run", "Single", "Stop"},
+        "run_control": {"RUN", "STOP", "SINGLE"},
+    },
 }
 
 
 @pytest.mark.parametrize("model", sorted(MODEL_REGISTRY))
-def test_profile_declares_complete_ds1000z_trigger_inventory(model: str) -> None:
-    """Every DS1000Z profile must declare the full :TRIG:MODE type set so
-    a future scope_trigger tool can validate against it. Guards against
-    silently dropping a type (e.g. forgetting the option-licensed ones).
+def test_profile_declares_complete_family_trigger_inventory(model: str) -> None:
+    """Every profile must declare the full :TRIGger:MODE type set its
+    family's instruction set accepts, so scope_trigger can validate
+    against it. Guards against silently dropping a type.
     """
     _, filename = MODEL_REGISTRY[model]
     profile = instruments._load_profile(filename)
+    family = profile.get("family")
+    assert family in _FAMILY_TRIGGER_TYPES, (
+        f"{filename} declares unknown family {family!r}; add its trigger "
+        "inventory to _FAMILY_TRIGGER_TYPES"
+    )
     trig = profile["capability"]["trigger"]
 
     declared = {
         (t["keyword"], t["query"], bool(t["option"])) for t in trig["types"]
     }
-    assert declared == _DS1000Z_TRIGGER_TYPES, (
+    assert declared == _FAMILY_TRIGGER_TYPES[family], (
         f"{filename} trigger inventory drifted from the programming guide"
     )
     # Query-return forms must be unique — they are how :TRIG:MODE? results
     # are mapped back to a known type.
     queries = [t["query"] for t in trig["types"]]
     assert len(queries) == len(set(queries)), "duplicate :TRIG:MODE? form"
-    assert trig["sweep_modes"] == ["AUTO", "NORMAL", "SINGLE"]
-    assert set(trig["status_values"]) == {"TD", "WAIT", "RUN", "AUTO", "STOP"}
+
+    meta = _FAMILY_TRIGGER_META[family]
+    assert trig["sweep_modes"] == meta["sweep_modes"]
+    assert set(trig["status_values"]) == meta["status_values"]
 
     # Every type must declare a non-empty params schema, and each param
     # must carry a SCPI node + a known kind so the engine can act on it.
@@ -172,7 +271,7 @@ def test_profile_declares_complete_ds1000z_trigger_inventory(model: str) -> None
                 assert spec.get("values"), f"{t['keyword']}.{pname} enum needs values"
 
     # Run/arm control actions must be declared for the run-control path.
-    assert set(trig.get("run_control", {})) == {"RUN", "STOP", "SINGLE", "FORCE"}, (
+    assert set(trig.get("run_control", {})) == meta["run_control"], (
         f"{filename} run_control actions drifted"
     )
 

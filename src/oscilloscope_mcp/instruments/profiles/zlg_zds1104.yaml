@@ -1,0 +1,39 @@
+# ZLG ZDS1104 — 100 MHz, 4-channel digital oscilloscope (ZDS1000 series).
+# Used by helpers.caveat_calc to compute observation-limit warnings.
+
+model: ZLG_ZDS1104
+vendor: ZLG
+family: ZDS1000
+# Real IDN captured on hardware (fw 1.2.67):
+#   "ZHIYUAN ELECT,ZDS1104,8208000391810170058,V1.00,1.2.67.240719"
+idn_match: "(?i)ZHIYUAN\\s*ELECT,\\s*ZDS1104\\b"
+includes: [_zds1000_family.yaml]
+transport:
+  kind: scpi_lan
+  default_port: 5025
+
+capability:
+  analog_bw_hz: 100.0e6
+  channels: 4
+  # Verified on hardware: :ACQuire:SRATe? caps at 1 GSa/s and derates
+  # with enabled channels exactly like the DS1000Z. The instantaneous
+  # rate is also coupled to timebase × memory depth (caveat_calc uses
+  # these as per-mode upper bounds).
+  sample_rate_mode_dependent:
+    "1": 1.0e9
+    "2": 500.0e6
+    "4": 250.0e6
+  memory_depth_pts_total: 28.0e6
+  input_impedance_ohm: 1.0e6
+  trigger_jitter_min_ns_per_sample_period: 1.0
+  screenshot_formats: [BMP]
+  # No channel-label SCPI exists on ZDS1000 — screenshot plans must not
+  # claim labels were applied (conformance asserts on this).
+  channel_labels: false
+  display_pixel_width: 800
+  display_pixel_height: 480
+
+notes:
+  - "Screenshots are BMP only — :DISPlay:DATA? takes no format parameter."
+  - "Probe ratios must be sent as integer literals (10, not 10.0)."
+  - "Stock 10:1 passive probe adds capacitive loading — derate edge timing on fast nodes."

@@ -17,6 +17,7 @@ revisit in P4 if a ``bench_session`` abstraction is needed).
 from __future__ import annotations
 
 import socket
+import struct
 import time
 from dataclasses import dataclass
 from typing import Callable, TypeVar
@@ -24,6 +25,14 @@ from typing import Callable, TypeVar
 
 class ScpiError(RuntimeError):
     """Raised on SCPI transport errors (timeout, malformed response, etc.)."""
+
+
+class ScpiEmptyBlockError(ScpiError):
+    """A binary block arrived with zero / invalid length. ZLG
+    ``:GLOBal:MULTiwave?`` does this until the first complete
+    acquisition exists after a run-state or configuration change — a
+    benign transient drivers may retry, unlike a protocol violation.
+    """
 
 
 class ScpiTransientError(ScpiError):
@@ -111,6 +120,21 @@ class ScpiLan:
             raise ScpiError(f"query_binary() requires a '?' in command, got: {cmd!r}")
         return self._retry(lambda: self._query_binary_once(cmd, recv_max), cmd)
 
+    def query_length_prefixed(self, cmd: str, recv_max: int = 64 * 1024 * 1024) -> bytes:
+        """Send a SCPI query whose response is framed as a 4-byte
+        little-endian int32 payload length followed by exactly that many
+        payload bytes (ZLG ``:GLOBal:MULTiwave?`` waveform reads).
+
+        Returns the raw payload bytes (length prefix and best-effort
+        trailing newline stripped). This is NOT IEEE-488.2 framing —
+        see :meth:`query_binary` for the ``#``-block format.
+        """
+        if "?" not in cmd:
+            raise ScpiError(
+                f"query_length_prefixed() requires a '?' in command, got: {cmd!r}"
+            )
+        return self._retry(lambda: self._query_length_prefixed_once(cmd, recv_max), cmd)
+
     # -- single-attempt I/O ------------------------------------------------
 
     def _write_once(self, cmd: str) -> None:
@@ -133,6 +157,11 @@ class ScpiLan:
         with self._connect() as sock:
             sock.sendall(_encode_line(cmd))
             return _recv_binary_block(sock, recv_max)
+
+    def _query_length_prefixed_once(self, cmd: str, recv_max: int) -> bytes:
+        with self._connect() as sock:
+            sock.sendall(_encode_line(cmd))
+            return _recv_length_prefixed(sock, recv_max)
 
     def _retry(self, fn: Callable[[], _T], cmd: str) -> _T:
         last: BaseException | None = None
@@ -206,6 +235,29 @@ def _recv_binary_block(sock: socket.socket, recv_max: int) -> bytes:
     if payload_len > recv_max:
         raise ScpiError(
             f"binary block payload {payload_len} bytes exceeds recv_max {recv_max}"
+        )
+    payload = _recv_exactly(sock, payload_len)
+    # Some firmware appends a trailing newline; consume it best-effort.
+    try:
+        sock.settimeout(0.2)
+        sock.recv(1)
+    except OSError:
+        pass
+    return payload
+
+
+def _recv_length_prefixed(sock: socket.socket, recv_max: int) -> bytes:
+    """Read a 4-byte little-endian int32 length + exactly that many
+    payload bytes (ZLG ``:GLOBal:MULTiwave?`` framing).
+    """
+    (payload_len,) = struct.unpack("<i", _recv_exactly(sock, 4))
+    if payload_len <= 0:
+        raise ScpiEmptyBlockError(
+            f"length-prefixed block has non-positive length {payload_len}"
+        )
+    if payload_len > recv_max:
+        raise ScpiError(
+            f"length-prefixed payload {payload_len} bytes exceeds recv_max {recv_max}"
         )
     payload = _recv_exactly(sock, payload_len)
     # Some firmware appends a trailing newline; consume it best-effort.
