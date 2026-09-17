@@ -702,10 +702,17 @@ def _parse_wfm(payload: bytes, channel: int) -> tuple[dict[str, Any], dict[str, 
     for i in range(item_num):
         fields = _WFM_ITEM.unpack_from(payload, _WFM_HEAD.size + i * _WFM_ITEM.size)
         by_channel[fields[0]] = fields
-    # iChannel numbering is not documented (0- or 1-based). A channel-0
-    # key implies 0-based firmware; otherwise assume 1-based.
+    # iChannel numbering is not documented (0- or 1-based). Multi-item
+    # streams from the observed firmware carry a channel-0 key (0-based).
+    # A single-item answer to the channel just requested is also
+    # decisive: its key is one of the two spellings of that channel
+    # (n−1 when 0-based, n when 1-based), so accept both — fw 1.2.67
+    # answers ``SCREen,CHANnel2`` with a lone iChannel=1 item, which the
+    # strict 1-based lookup rejected as "no item for channel 2".
     if 0 in by_channel:
         item = by_channel.get(channel - 1)
+    elif len(by_channel) == 1 and channel - 1 in by_channel:
+        item = by_channel[channel - 1]
     else:
         item = by_channel.get(channel)
     if item is None:

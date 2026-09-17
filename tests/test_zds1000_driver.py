@@ -425,6 +425,19 @@ def test_parse_wfm_accepts_zero_based_channel_numbering() -> None:
     assert head["sample_rate"] == pytest.approx(1.0e9)
 
 
+def test_parse_wfm_single_item_stream_matches_requested_channel() -> None:
+    # fw 1.2.67 answers SCREen,CHANnel<n> with a lone 0-based item
+    # (CH2 -> iChannel=1, CH3 -> iChannel=2); the requested channel
+    # disambiguates the numbering, so these must parse.
+    head, item, data = _parse_wfm(_wfm_payload(channel=1, samples=b"\x7f"), 2)
+    assert data == b"\x7f"
+    assert item["vert_div_v"] == pytest.approx(1.0e-3)
+    assert head["sample_rate"] == pytest.approx(1.0e9)
+
+    _, _, data = _parse_wfm(_wfm_payload(channel=2, samples=b"\x81"), 3)
+    assert data == b"\x81"
+
+
 def test_parse_wfm_rejects_bad_magic() -> None:
     payload = _wfm_payload()
     payload = b"XXX\x00" + payload[4:]
