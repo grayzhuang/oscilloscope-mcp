@@ -1,4 +1,4 @@
-**English** | [日本語](README.ja.md)
+**English** | [日本語](README.ja.md) | [简体中文](README.zh.md)
 
 # oscilloscope-mcp
 
@@ -73,11 +73,12 @@ tools, with no hands on the front panel.*
 - **Plug-in architecture.** Add a new vendor / model with two files: a SCPI-dialect
   driver and a capability profile YAML. Capability is declared data, not code.
 
-- **Tested.** ~560 unit tests plus live conformance against real hardware.
+- **Tested.** ~590 unit tests plus live conformance against real hardware.
 
-> Drivers ship for the **RIGOL DS1000Z series** (DS1054Z / DS1074Z / DS1104Z);
-> only **DS1104Z** is verified on real hardware so far. The others use the same
-> code path and profile, but are not conformance-tested yet.
+> Drivers ship for the **RIGOL DS1000Z series** (DS1054Z / DS1074Z / DS1104Z)
+> and the **ZLG ZDS1000 series** (ZDS1104). **DS1104Z** and **ZDS1104** are
+> verified on real hardware; the other RIGOL models use the same code path
+> and profile, but are not conformance-tested yet.
 
 ## Install
 
@@ -146,10 +147,13 @@ oscilloscope-mcp/                 # repo (kebab-case)
 │   │   ├── _base.py          # Scope ABC, vendor-agnostic interface
 │   │   ├── __init__.py       # MODEL_REGISTRY + open_scope() dispatch
 │   │   ├── rigol_ds1000z.py  # RIGOL DS1054Z / DS1104Z driver
+│   │   ├── zlg_zds1000.py    # ZLG ZDS1000-series driver (ZDS1104)
 │   │   └── profiles/
 │   │       ├── _ds1000z_family.yaml  # shared trigger + acquisition schema
 │   │       ├── rigol_ds1104z.yaml
-│   │       └── rigol_ds1054z.yaml
+│   │       ├── rigol_ds1054z.yaml
+│   │       ├── _zds1000_family.yaml  # ZDS1000 family schema
+│   │       └── zlg_zds1104.yaml
 │   └── helpers/
 │       ├── caveat_calc.py    # capability + current setting → caveats[]
 │       ├── trigger.py        # trigger profile: validate / normalize / caveats
@@ -176,7 +180,7 @@ oscilloscope-mcp/                 # repo (kebab-case)
 | Env var | Required | Meaning |
 |---|---|---|
 | `SCOPE_MCP_HOST` | yes | scope IP or hostname |
-| `SCOPE_MCP_PORT` | no (default 5555) | SCPI TCP port |
+| `SCOPE_MCP_PORT` | no | SCPI TCP port. Unset → the selected model profile's `default_port` (RIGOL 5555, ZLG 5025); for `*IDN?` auto-detect the common ports (5555, 5025) are probed |
 | `SCOPE_MCP_MODEL` | no | model key (e.g. `RIGOL_DS1104Z`). If unset, `*IDN?` is parsed and matched against each profile's `idn_match` regex |
 
 Env-var prefix `SCOPE_MCP_*` is project-specific so it does not collide
@@ -220,6 +224,17 @@ waveform capture in **NORMal and RAW (full memory)**, declarative `scope_capture
 run control, trigger **mode** switching across all 15 types, and the validation
 (rejection) paths.
 
+The same suite passes against a live ZLG **ZDS1104** (fw 1.2.67): connection /
+IDN / port auto-detect, raw SCPI, BMP screenshot, channel / timebase / acquire
+read+set, measurements and statistics, waveform capture in **SCREen and MEMOry
+(full memory, requires STOP — enforced)**, single-shot `scope_capture`, run
+control, trigger mode switching across all 11 types, and the rejection paths.
+The ZDS1000 binary WFM layout and the 8-bit sample encoding (code 128 = screen
+center, 25 codes/div, screen-referred) were pinned down on that unit via a
+GND-coupling calibration. ZDS1000-specific notes: screenshots are **BMP only**
+(a PNG request falls back to BMP), `SINGLE` is a run-control action (not a
+sweep mode), and the `FORCE` run action has no SCPI equivalent registered yet.
+
 Built from the official programming guide and unit-tested, but **not yet
 confirmed on real hardware**. Treat these as based on the spec until they are
 verified:
@@ -234,8 +249,8 @@ verified:
 - **`scope_compare` against a real simulation.** The diff engine is unit-tested
   and verified on real captured edges shifted by a known amount, but a genuine
   *RTL-simulation-output vs hardware-capture* run has not been done yet.
-- **Models other than DS1104Z** (DS1054Z / DS1074Z): same code path + profile,
-  not conformance-tested.
+- **Models other than DS1104Z** (DS1054Z / DS1074Z) and **ZDS1000 models
+  other than ZDS1104**: same code path + profile, not conformance-tested.
 
 ## Security / trust model
 
@@ -254,7 +269,8 @@ Within that boundary:
   server enabled can fully reconfigure your scope and read everything
   on its screen. Use it accordingly.
 - The SCPI connection to the scope itself is **unauthenticated TCP**
-  on the scope's LAN port (RIGOL DS1000Z uses 5555). Anything on the
+  on the scope's LAN port (RIGOL DS1000Z uses 5555, ZLG ZDS1000 uses
+  5025). Anything on the
   same network can already talk to the scope. Installing this MCP
   server does not change that; it just gives the AI agent the same
   access you already have.
