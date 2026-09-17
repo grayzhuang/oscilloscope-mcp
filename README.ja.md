@@ -71,6 +71,11 @@ FPGA の開発を AIエージェントに任せたとき、実機での動作確
 ```bash
 git clone https://github.com/masahiro-999/oscilloscope-mcp.git
 cd oscilloscope-mcp
+
+# 推奨: 専用環境（venv / conda env）にインストールすると、
+# 日常的なパッケージ操作がサーバーを壊すことがない。
+#   python -m venv .venv && source .venv/bin/activate
+#   # または: conda create -n scope-mcp python=3.12 && conda activate scope-mcp
 pip install -e .
 ```
 
@@ -87,11 +92,42 @@ python -m oscilloscope_mcp
 oscilloscope-mcp
 ```
 
-## Claude Code への登録
+## MCP ホストへの登録
+
+MCP ホストは本サーバーを stdio サブプロセスとして起動するため、
+接続設定はシェルではなくホスト側の登録情報に持たせます。
+Claude Code のユーザースコープ（全プロジェクトで有効）：
 
 ```bash
-claude mcp add oscilloscope -- python -m oscilloscope_mcp
+claude mcp add --scope user oscilloscope \
+  --env SCOPE_MCP_HOST=192.168.1.42 \
+  --env SCOPE_MCP_MODEL=ZLG_ZDS1104 \
+  -- python -m oscilloscope_mcp
 ```
+
+プロジェクト単位ならリポジリ直下に `.mcp.json` を置く方法もあります
+（Claude Code / Cursor など主要ホストが同じ形式を認識します）：
+
+```json
+{
+  "mcpServers": {
+    "oscilloscope": {
+      "command": "<専用環境の python への絶対パス>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.42",
+        "SCOPE_MCP_MODEL": "ZLG_ZDS1104"
+      }
+    }
+  }
+}
+```
+
+- `command` はインストール先環境の Python に**絶対パスで**指定する
+  のが安全です（GUI 起動のホストはシェルと `PATH` が異なることがある）。
+- `SCOPE_MCP_MODEL`（と任意の `SCOPE_MCP_PORT`）を明示すると、ツール
+  呼び出しのたびに行われるポート探索 + `*IDN?` 自動判識の往復を
+  省略できます。変数の一覧は[環境変数](#環境変数)を参照。
 
 これで、このMCPサーバーに接続したセッションから
 `scope_query` / `scope_screenshot` / `scope_trigger` / `scope_measure` /

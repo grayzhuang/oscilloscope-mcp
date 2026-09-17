@@ -70,8 +70,16 @@ MCP 服务器。
 ```bash
 git clone https://github.com/masahiro-999/oscilloscope-mcp.git
 cd oscilloscope-mcp
+
+# 建议：装进专用环境（venv 或 conda env），
+# 日常其他环境的装包/升级不会波及 MCP server。
+#   python -m venv .venv && source .venv/bin/activate
+#   # 或：conda create -n scope-mcp python=3.12 && conda activate scope-mcp
 pip install -e .
 ```
+
+依赖构成、版本约束原因（含 mcp < 2 上界）与 Windows/conda 环境实测坑，详见
+[docs/environment.md](docs/environment.md)。
 
 ## 作为 MCP 服务器运行
 
@@ -86,11 +94,42 @@ python -m oscilloscope_mcp
 oscilloscope-mcp
 ```
 
-## 注册到 Claude Code
+## 注册到 MCP 宿主
+
+MCP 宿主以 stdio 子进程方式拉起本服务器，因此连接配置应写进宿主的
+注册信息里，而不是依赖 shell 的环境变量。Claude Code 用户级（对所有
+项目生效）：
 
 ```bash
-claude mcp add oscilloscope -- python -m oscilloscope_mcp
+claude mcp add --scope user oscilloscope \
+  --env SCOPE_MCP_HOST=192.168.1.42 \
+  --env SCOPE_MCP_MODEL=ZLG_ZDS1104 \
+  -- python -m oscilloscope_mcp
 ```
+
+或者项目级：在仓库根目录放一个 `.mcp.json`，Claude Code、Cursor 等
+主流 MCP 宿主都识别这个格式：
+
+```json
+{
+  "mcpServers": {
+    "oscilloscope": {
+      "command": "<专用环境 python 的绝对路径>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.42",
+        "SCOPE_MCP_MODEL": "ZLG_ZDS1104"
+      }
+    }
+  }
+}
+```
+
+- `command` 指向安装时所进环境的 Python，**建议写绝对路径**：
+  GUI 方式启动的宿主，其 `PATH` 可能与你的 shell 不同。
+- 显式设置 `SCOPE_MCP_MODEL`（以及可选的 `SCOPE_MCP_PORT`）可以
+  跳过每次工具调用前的端口探测 + `*IDN?` 自动识别往返。全部变量
+  见[环境变量](#环境变量)一节。
 
 之后，连接到该 MCP 服务器的任何会话都可以使用 `scope_query`、`scope_screenshot`、
 `scope_trigger`、`scope_measure`、`scope_measure_stat`、`scope_channel`、

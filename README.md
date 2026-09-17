@@ -85,6 +85,11 @@ tools, with no hands on the front panel.*
 ```bash
 git clone https://github.com/masahiro-999/oscilloscope-mcp.git
 cd oscilloscope-mcp
+
+# Recommended: install into a dedicated environment (venv or conda env)
+# so day-to-day package changes elsewhere can't break the server.
+#   python -m venv .venv && source .venv/bin/activate
+#   # or: conda create -n scope-mcp python=3.12 && conda activate scope-mcp
 pip install -e .
 ```
 
@@ -101,11 +106,44 @@ python -m oscilloscope_mcp
 oscilloscope-mcp
 ```
 
-## Register with Claude Code
+## Register with an MCP host
+
+The MCP host launches this server as a stdio subprocess, so connection
+settings belong in the host registration rather than your shell
+profile. Claude Code, user scope (available to all projects):
 
 ```bash
-claude mcp add oscilloscope -- python -m oscilloscope_mcp
+claude mcp add --scope user oscilloscope \
+  --env SCOPE_MCP_HOST=192.168.1.42 \
+  --env SCOPE_MCP_MODEL=ZLG_ZDS1104 \
+  -- python -m oscilloscope_mcp
 ```
+
+Or per-project: drop a `.mcp.json` in the repo root — the same shape
+most MCP hosts (Claude Code, Cursor, …) pick up:
+
+```json
+{
+  "mcpServers": {
+    "oscilloscope": {
+      "command": "<absolute path to the dedicated env's python>",
+      "args": ["-m", "oscilloscope_mcp"],
+      "env": {
+        "SCOPE_MCP_HOST": "192.168.1.42",
+        "SCOPE_MCP_MODEL": "ZLG_ZDS1104"
+      }
+    }
+  }
+}
+```
+
+- Point `command` at the Python of the environment you installed into,
+  preferably by absolute path — a GUI-launched host may have a different
+  `PATH` than your shell.
+- Setting `SCOPE_MCP_MODEL` (and optionally `SCOPE_MCP_PORT`) skips the
+  port-probe + `*IDN?` auto-detect round-trip that would otherwise run
+  before every tool call. See [Environment](#environment) for all
+  variables.
 
 Then the `scope_query`, `scope_screenshot`, `scope_trigger`,
 `scope_measure`, `scope_measure_stat`, `scope_channel`, `scope_timebase`,
