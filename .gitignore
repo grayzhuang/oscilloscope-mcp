@@ -21,6 +21,11 @@ Thumbs.db
 !.vscode/settings.json
 .idea/
 
+# Local instrument artifacts (scope setups, raw waveforms)
+# folder itself stays in git via data/README.md; contents are never committed
+data/*
+!data/README.md
+
 # Runtime artifacts (test screenshots etc.)
 runs/
 *.png
@@ -28,3 +33,4 @@ runs/
 !docs/**/*.png
 !docs/**/*.bmp
 .claude/
+.zcode/
