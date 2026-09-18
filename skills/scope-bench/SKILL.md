@@ -15,8 +15,9 @@ library (`oscilloscope_mcp`):
 2. **Scripts** (`scripts/`, run with the dedicated env):
    `scope_cli.py doctor|dump|meas-log|screenshot` (online, file output),
    `analyze.py glitch|jitter|pattern|causality|bus|fft|hist|envelope`
-   (offline, file input), and `plot.py wave|trend` (offline PNG;
-   matplotlib optional — `wave` falls back to the HTML viewer).
+   (offline, file input), `plot.py wave|trend` (offline PNG;
+   matplotlib optional — `wave` falls back to the HTML viewer), and the
+   RTL loop `vcd2ref.py` + `compare_rtl.py` (offline).
    Run as:
    `conda run -n oscScope-mcp python skills/scope-bench/scripts/<x>.py …`
 
@@ -50,7 +51,7 @@ A number quoted without its caveats is a wrong number.
 | Measurement trend over time (warm-up, stability) | `scope_cli.py meas-log` → `plot.py trend` |
 | Multi-bit bus decode | `scope_capture` (bus_runs) or `analyze.py bus` |
 | Human-viewable trace | `plot.py wave` (PNG) / `scope_viewer` (HTML) / `scope_screenshot` |
-| Sim vs hardware diff | `scope_compare` (offline mode needs no scope) |
+| Sim vs hardware diff | `vcd2ref.py` → `compare_rtl.py` (report), or `scope_compare` (MCP) |
 
 ## Parameter rules (apply everywhere)
 

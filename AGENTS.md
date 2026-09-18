@@ -39,11 +39,13 @@ src/oscilloscope_mcp/
 
 `skills/scope-bench/` — agent 流程知识层（SKILL.md + recipes/models 参考 +
 scope_cli（doctor/dump/meas-log/screenshot）、analyze（8 个分析子命令）、
-plot（wave/trend，matplotlib 可选 `.[plot]`，缺失降级 HTML viewer））：
+plot（wave/trend，matplotlib 可选 `.[plot]`，缺失降级 HTML viewer）、
+vcd2ref + compare_rtl（VCD/CSV→参考边沿、RTL vs 硬件 diff 报告））：
 脚本一律调库走 MCP 同一校验路径，不自行拼 SCPI；机型差异只收在
 `references/models.md`，SKILL.md 主体与脚本不出现机型名；单测在
-`tests/test_scope_cli.py`、`tests/test_analyze.py`、`tests/test_plot.py`
-（mock 传输层/fixture，无硬件）。实施计划见 `docs/scope-bench-plan.md`。
+`tests/test_scope_cli.py`、`tests/test_analyze.py`、`tests/test_plot.py`、
+`tests/test_vcd2ref.py`、`tests/test_compare_rtl.py`（mock 传输层/fixture，
+无硬件）。实施计划见 `docs/scope-bench-plan.md`。
 
 编辑规则：
 

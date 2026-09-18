@@ -145,19 +145,32 @@ is a firmware quirk — see models.md, don't log it for an hour.
 ## R8 — RTL sim vs hardware diff
 
 Goal: the project's core loop — golden edges from simulation vs real
-pins.
+pins. Fully scripted now:
 
-1. Extract reference edges from the sim (VCD/CSV export; a dedicated
-   `vcd2ref.py` bridge is planned — meanwhile export edge lists
-   `[t_us, kind]` yourself).
-2. Capture hardware: `scope_capture(channels=["CHAN1"], sweep="SINGLE")`
-   or R4 dump → convert to edges.
-3. `scope_compare(reference_edges=<ref>, hw_edges=<hw>,
-   tolerance_us=0.05)` — offline mode, no scope connection needed.
+```
+# 1. Reference: VCD from the simulator (or a known-good dump CSV)
+vcd2ref.py -i sim.vcd --signal top.uart.tx -o ref.json
+# 2. Hardware: capture JSON or dump CSV (both work as --hw)
+scope_capture(channels=["CHAN1"], sweep="SINGLE")   # save the result JSON
+scope_cli.py dump CHAN1 --mode RAW                  # or dump the full memory
+# 3. Align + diff + report
+compare_rtl.py --ref ref.json --hw capture.json --hw-channel CHAN1 \
+    --tolerance-us 0.05 --md report.md
+```
+
+**Alignment is your job**: hardware edges are trigger-aligned (t=0 =
+trigger), the simulation axis is the testbench's. Find hw's first edge
+(`vcd2ref.py -i dump.csv` prints `t_first_us`), then shift the reference
+with `--ref-offset-us` so both axes share an origin — or expect every
+edge to show up as missing/added.
 
 Returns matched / shifted (with per-edge `delta_us`) / missing / added /
 `first_divergence_us`. Set `tolerance_us` to a few sample intervals —
-tighter than the sample rate produces pure noise.
+tighter than the sample rate produces pure noise. `vcd2ref` also accepts
+a dump CSV (one board as golden reference for another board).
+
+Alternatively call the `scope_compare` MCP tool directly with
+`reference_edges` + `hw_edges`/`hw_runs` (offline, no scope).
 
 ## Troubleshooting quick table
 
