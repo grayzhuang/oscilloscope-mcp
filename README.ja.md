@@ -191,6 +191,20 @@ claude mcp add --scope user oscilloscope \
 | `scope_compare` | **sim と実機のリファレンス差分**。プロジェクトの中核目標。RTL シミュレータからの golden なエッジ/run リストを取り、実機（ライブ取得または与えたデータ）と突き合わせる。`{matched, shifted[{ref_t_us, hw_t_us, delta_us, kind}], missing[{t_us, kind}], added[{t_us, kind}], first_divergence_us, summary, caveats}` を返す。2モード：*live*（`hw_runs`/`hw_edges` 未指定ならオシロから取得）または *offline*（取得済みデータを直接渡す。オシロ接続不要）。`tolerance_us`（既定 0.05 = 50ns）で同種2エッジが一致とみなされる近さを設定。信号非依存：SPI / I2C / UART / ULPI など任意のデジタル信号で動く。 |
 | `scope_viewer` | **自己完結型の HTML** 波形ビューアを生成。RAW 波形データを読み（オシロは停止状態が必要）、測定したアナログ電圧サンプルを HTML ファイルに埋め込む。機能：チャンネル別 ON/OFF トグル、チャンネル別 V/div ドロップダウン（10mV〜100V）、ドラッグ可能な GND オフセットマーカー（▶）、スクロールズームで 1-2-5 自動ステップする T/div ドロップダウン、ドラッグでパン、サンプル点にスナップする縦カーソルと固定電圧リードアウト、トリガ位置マーカー（t=0 に ▼T、`:TRIG:POS?` から導出）。`depth` でトリガを中心とした観測窓を制御：`"low"`（30k点、~120µs、転送 ~1秒）、`"mid"`（300k、~1.2ms、~3秒）、`"high"`（3M+、~12ms、~17秒）。深いほど転送が遅くなるため、通常はトリガ前後の一部を取得します（上限はオシロのバッファ容量）。ブラウザはズームアウト時にピクセル単位 min/max エンベロープで数百万点を描画し、ズームイン時は個々のサンプル + ドットを描画。 |
 
+## scope-bench スキル（ワークフロー層）
+
+MCP ツールは計測器プリミティブです。エージェントにはさらに*ワークフローの知識*——どの目的にどのツールをどの順で、どんなパラメータで——と、MCP の ~10 KB レスポンス予算に収まらない機能が必要です。その両方がこのリポジトリの `skills/scope-bench/` にあります：
+
+- **`SKILL.md`**——意思決定表（目的 → ツール/スクリプト）、パラメータ規則（threshold/hysteresis、NORMal と RAW の意味の違い、メモリ深度、イベント統計が切り詰められる MCP 波形ストリームではなく dump パスを通るべき理由）、実機に触れる前の承認ゲート。
+- **`references/`**——`recipes.md`（ヘルスチェックから RTL と実機の差分まで9シナリオの完全な呼び出しシーケンス）と `models.md`（ツール応答では表現できない機種別の事実。追記専用）。
+- **`scripts/`**——MCP ではできない部分。すべてオフラインでテスト可能：`scope_cli.py`（`doctor` 読み取り専用ヘルスチェックと設定スナップショット、`dump` 生電圧を CSV + meta へ、`meas-log` 間隔ポーリングで CSV と項目別統計、`screenshot` 拡張子は応答の `image_format` に追従）；`analyze.py`（保存済みキャプチャに対する glitch / jitter / pattern / causality / bus / fft / hist / envelope）；`plot.py`（波形とトレンドの PNG。matplotlib は任意、なければ HTML ビューアにフォールバック）；`vcd2ref.py` + `compare_rtl.py`（シミュレータの VCD → リファレンスエッジ → 実機キャプチャとの markdown 差分レポート）。
+
+スクリプトは `open_scope()` と MCP ツールと同一のドライバ検証を通ります——SCPI の手組みはなし——機種非依存を維持します（機種差は `references/models.md` にのみ）。専用環境で実行：
+
+```bash
+conda run -n oscScope-mcp python skills/scope-bench/scripts/scope_cli.py doctor
+```
+
 ## 構成
 
 ```
@@ -233,6 +247,9 @@ oscilloscope-mcp/                 # リポジトリ（kebab-case）
 │       ├── fft_peaks.py      # 上位N周波数ピーク（EMI / スイッチングノイズ）
 │       ├── causality_check.py      # ch間の「BはAの後N µs以内」
 │       └── envelope_downsample.py  # 可視化用 min/max 間引き
+├── skills/scope-bench/         # エージェントワークフロー層：SKILL.md + references
+│                              #   + scripts（doctor/dump/meas-log/screenshot、
+│                              #   analyze、plot、vcd2ref、compare_rtl）
 └── tests/                    # ユニット + ライブ conformance
 ```
 

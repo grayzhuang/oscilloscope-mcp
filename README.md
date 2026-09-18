@@ -208,6 +208,40 @@ to this MCP server.
 | `scope_compare` | **Sim vs HW reference diff**: the project's core goal. Takes a golden edge/run list from your RTL simulator and compares it against hardware (live capture or provided data). Returns `{matched, shifted[{ref_t_us, hw_t_us, delta_us, kind}], missing[{t_us, kind}], added[{t_us, kind}], first_divergence_us, summary, caveats}`. Two modes: *live* (captures from scope if `hw_runs`/`hw_edges` not provided) or *offline* (pass pre-captured data directly, no scope connection needed). `tolerance_us` (default 0.05 = 50 ns) sets how close two same-kind edges must be to count as a match. Signal-agnostic: works on SPI, I2C, UART, ULPI, or any digital signal. |
 | `scope_viewer` | Generate a **self-contained interactive HTML** waveform viewer. Reads RAW waveform data (scope must be stopped) and embeds the measured analog voltage samples into an HTML file. Features: per-channel ON/OFF toggle, per-channel V/div dropdown (10mV–100V), draggable GND offset markers (▶), T/div dropdown with 1-2-5 auto-stepping on scroll-zoom, drag-to-pan, vertical cursor snapped to sample points with fixed voltage readout, trigger position marker (▼T at t=0, derived from `:TRIG:POS?`). `depth` controls observation window centered on the trigger: `"low"` (30k pts, ~120µs, ~1s transfer), `"mid"` (300k, ~1.2ms, ~3s), `"high"` (3M+, ~12ms, ~17s). A bigger depth transfers more slowly, so a window around the trigger is the usual choice, with the scope's full memory as the upper limit. Browser renders millions of points via per-pixel min/max envelope when zoomed out, individual samples + dots when zoomed in. |
 
+## The scope-bench skill (workflow layer)
+
+The MCP tools are instrument primitives. An agent still needs *workflow
+knowledge* — which tool for which goal, in what order, with which
+parameters — plus things that don't fit the ~10 KB MCP response budget.
+Both ship in this repo under `skills/scope-bench/`:
+
+- **`SKILL.md`** — decision table (goal → tool/script), parameter rules
+  (threshold/hysteresis, NORMal vs RAW semantics, memory depth, why
+  event statistics must go through the dump path instead of the
+  truncated MCP waveform stream), and the authorization gate for
+  touching real hardware.
+- **`references/`** — `recipes.md` (complete call sequences for nine
+  scenarios, from health check to RTL-vs-hardware diff) and `models.md`
+  (per-model facts the tool responses can't express; append-only).
+- **`scripts/`** — what MCP can't do, all offline-testable:
+  `scope_cli.py` (`doctor` read-only health check + setup snapshot,
+  `dump` raw voltages → CSV + meta, `meas-log` interval polling → CSV +
+  statistics, `screenshot` with the extension following the returned
+  `image_format`); `analyze.py` (glitch / jitter / pattern / causality /
+  bus / fft / hist / envelope over saved captures); `plot.py` (waveform
+  and trend PNGs — matplotlib optional, falls back to the HTML viewer);
+  `vcd2ref.py` + `compare_rtl.py` (simulator VCD → reference edges →
+  markdown diff report against hardware captures).
+
+Scripts go through `open_scope()` and the same driver validation as the
+MCP tools — no hand-assembled SCPI — and stay model-agnostic
+(per-model differences live only in `references/models.md`). Run inside
+the dedicated env:
+
+```bash
+conda run -n oscScope-mcp python skills/scope-bench/scripts/scope_cli.py doctor
+```
+
 ## Layout
 
 ```
@@ -250,6 +284,9 @@ oscilloscope-mcp/                 # repo (kebab-case)
 │       ├── fft_peaks.py      # top-N frequency peaks (EMI / switching noise)
 │       ├── causality_check.py      # cross-channel "B follows A within N µs"
 │       └── envelope_downsample.py  # min/max decimation for visualization
+├── skills/scope-bench/         # agent workflow layer: SKILL.md + references
+│                              #   + scripts (doctor/dump/meas-log/screenshot,
+│                              #   analyze, plot, vcd2ref, compare_rtl)
 └── tests/                    # unit + live conformance
 ```
 

@@ -190,6 +190,20 @@ claude mcp add --scope user oscilloscope \
 | `scope_compare` | **仿真 vs 硬件参考 diff**：本项目的核心目标。接收来自 RTL 仿真器的金标边沿/电平段列表，与硬件实测（实时采集或传入数据）对比。返回 `{matched, shifted[{ref_t_us, hw_t_us, delta_us, kind}], missing[{t_us, kind}], added[{t_us, kind}], first_divergence_us, summary, caveats}`。两种模式：*live*（未提供 `hw_runs`/`hw_edges` 时从示波器采集）或 *offline*（直接传已采集数据，无需连接示波器）。`tolerance_us`（默认 0.05 = 50 ns）设定两个同类边沿相距多近才算匹配。信号无关：SPI、I2C、UART、ULPI 或任何数字信号都适用。 |
 | `scope_viewer` | 生成**单文件可交互 HTML** 波形查看器。读取 RAW 波形数据（示波器须停止），把实测模拟电压样本嵌入一个 HTML 文件。功能：每通道 ON/OFF 开关、每通道 V/div 下拉（10mV–100V）、可拖动的 GND 偏移标记（▶）、滚轮缩放时按 1-2-5 步进的 T/div 下拉、拖拽平移、吸附到采样点并固定电压读数的垂直光标、触发位置标记（t=0 处的 ▼T，来自 `:TRIG:POS?`）。`depth` 控制以触发为中心的观测窗口：`"low"`（3 万点，~120µs，传输约 1s）、`"mid"`（30 万点，~1.2ms，约 3s）、`"high"`（300 万点以上，~12ms，约 17s）。深度越大传输越慢，因此通常选择触发附近的窗口，上限为示波器全内存。浏览器在拉远时按每像素 min/max 包络渲染数百万点，拉近时显示单个样本和圆点。 |
 
+## scope-bench skill（流程层）
+
+MCP 工具是仪器原语；agent 还缺*流程知识*——什么目标调哪个工具、什么顺序、参数怎么选——以及 MCP 约 10 KB 响应预算装不下的能力。这两样都在仓库 `skills/scope-bench/` 里：
+
+- **`SKILL.md`**——路径决策表（目标 → 工具/脚本）、参数规则（threshold/hysteresis、NORMal 与 RAW 的语义差异、内存深度档位、为什么事件统计必须走 dump 路径而非会被截断的 MCP 波形流），以及触碰真机前的授权门槛。
+- **`references/`**——`recipes.md`（九个场景的完整调用序列，从上手体检到 RTL 与硬件 diff）和 `models.md`（工具响应表达不了的机型事实；只增不改）。
+- **`scripts/`**——MCP 干不了、且全部可离线测试的部分：`scope_cli.py`（`doctor` 只读体检与配置快照、`dump` 原始电压落盘 CSV+meta、`meas-log` 定时轮询测量出 CSV 与逐项统计、`screenshot` 扩展名跟随响应的 `image_format`）；`analyze.py`（对已存捕获做 glitch / jitter / pattern / causality / bus / fft / hist / envelope）；`plot.py`（波形与趋势 PNG——matplotlib 可选，缺失时降级 HTML viewer）；`vcd2ref.py` + `compare_rtl.py`（仿真 VCD → 参考边沿 → 对硬件捕获的 markdown diff 报告）。
+
+脚本一律走 `open_scope()` 和与 MCP 工具相同的驱动校验路径——不自行拼 SCPI——且保持机型无关（机型差异只收在 `references/models.md`）。在专用环境里运行：
+
+```bash
+conda run -n oscScope-mcp python skills/scope-bench/scripts/scope_cli.py doctor
+```
+
 ## 目录结构
 
 ```
@@ -232,6 +246,9 @@ oscilloscope-mcp/                 # 仓库（kebab-case）
 │       ├── fft_peaks.py      # top-N 频率峰值（EMI / 开关噪声）
 │       ├── causality_check.py      # 跨通道 “B 在 N µs 内跟随 A” 检查
 │       └── envelope_downsample.py  # 用于可视化的 min/max 抽取
+├── skills/scope-bench/         # agent 流程层：SKILL.md + references
+│                              #   + scripts（doctor/dump/meas-log/screenshot、
+│                              #   analyze、plot、vcd2ref、compare_rtl）
 └── tests/                    # 单元测试 + live conformance
 ```
 
