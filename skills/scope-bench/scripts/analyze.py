@@ -16,6 +16,11 @@ Accepted inputs (detected by shape, parsed leniently)
   ``<stem>.meta.json`` — re-quantized with ``--threshold-v`` /
   ``--hysteresis-v`` (Schmitt trigger, same convention as the tools).
 
+The volts-domain sub-commands (``fft`` / ``hist`` / ``envelope``) need
+the raw samples and therefore accept **dump CSV only** — runs/edges
+JSON is already threshold-quantized and has no amplitude information
+left.
+
 Output is JSON on stdout (top-level ``schema`` version for forward
 compatibility); ``--md`` switches to a markdown report instead.
 
@@ -26,6 +31,9 @@ Usage::
     python skills/scope-bench/scripts/analyze.py pattern -i cap.json --pattern 0,1,0,1
     python skills/scope-bench/scripts/analyze.py causality -i cap.json --a CHAN1 --b CHAN2 --max-delay-us 2
     python skills/scope-bench/scripts/analyze.py bus -i cap.json --channels CHAN1,CHAN2
+    python skills/scope-bench/scripts/analyze.py fft -i dump_chan1.csv --peaks 8
+    python skills/scope-bench/scripts/analyze.py hist -i dump_chan1.csv --bins 64
+    python skills/scope-bench/scripts/analyze.py envelope -i dump_chan1.csv --points 400
 """
 
 from __future__ import annotations
@@ -42,8 +50,11 @@ from oscilloscope_mcp.helpers import quantize as quantize_helper
 from oscilloscope_mcp.helpers import rle as rle_helper
 from oscilloscope_mcp.helpers.causality_check import causality_check
 from oscilloscope_mcp.helpers.edge_interval_stats import edge_interval_stats
+from oscilloscope_mcp.helpers.envelope_downsample import envelope_downsample
+from oscilloscope_mcp.helpers.fft_peaks import _next_power_of_2, fft_peaks
 from oscilloscope_mcp.helpers.glitch_list import glitch_list
 from oscilloscope_mcp.helpers.pattern_search import pattern_search
+from oscilloscope_mcp.helpers.voltage_histogram import voltage_histogram
 
 SCHEMA_VERSION = "scope-analyze/1"
 
@@ -90,15 +101,8 @@ def _channel_data_from_json(
     }
 
 
-def _load_csv_input(
-    csv_path: Path, *, threshold_v: float, hysteresis_v: float
-) -> dict[str, Any]:
-    """Rebuild runs/edges from a dump CSV via Schmitt re-quantization."""
-    meta_path = csv_path.with_name(csv_path.stem + ".meta.json")
-    meta: dict[str, Any] = {}
-    if meta_path.is_file():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-
+def _read_samples_csv(csv_path: Path) -> tuple[list[float], list[float]]:
+    """Parse a dump CSV → (times_s, volts). Header line optional."""
     volts: list[float] = []
     times: list[float] = []
     with csv_path.open("r", encoding="ascii") as f:
@@ -109,6 +113,22 @@ def _load_csv_input(
             t_s, v = line.split(",")
             times.append(float(t_s))
             volts.append(float(v))
+    return times, volts
+
+
+def _csv_meta(csv_path: Path) -> dict[str, Any]:
+    meta_path = csv_path.with_name(csv_path.stem + ".meta.json")
+    if meta_path.is_file():
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _load_csv_input(
+    csv_path: Path, *, threshold_v: float, hysteresis_v: float
+) -> dict[str, Any]:
+    """Rebuild runs/edges from a dump CSV via Schmitt re-quantization."""
+    meta = _csv_meta(csv_path)
+    times, volts = _read_samples_csv(csv_path)
     if not volts:
         raise ValueError(f"no samples found in {csv_path}")
 
@@ -135,6 +155,20 @@ def _load_csv_input(
     return {
         source: {"runs": runs, "edges": edges, "caveats": caveats}
     }
+
+
+def load_volts(path: Path) -> tuple[list[float], dict[str, Any]]:
+    """Volts-domain input (fft/hist/envelope): dump CSV → (volts, meta)."""
+    if path.suffix.lower() != ".csv":
+        raise ValueError(
+            f"{path.name}: fft/hist/envelope operate on raw samples and "
+            "need a scope_cli dump CSV (runs/edges JSON has no amplitude "
+            "information left)"
+        )
+    _, volts = _read_samples_csv(path)
+    if not volts:
+        raise ValueError(f"no samples found in {path}")
+    return volts, _csv_meta(path)
 
 
 def load_input(
@@ -273,6 +307,57 @@ def run_bus(inp: dict, args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+# Volts-domain sub-commands (dump CSV input only) -------------------------
+
+
+def run_fft(volts: list[float], meta: dict[str, Any],
+            args: argparse.Namespace) -> dict[str, Any]:
+    dt_s = float(meta.get("dt_s") or 0.0)
+    result = fft_peaks(volts, dt_s, n_peaks=args.peaks)
+    caveats = list(meta.get("caveats") or [])
+    n_fft = _next_power_of_2(len(volts)) if volts else 1
+    if len(volts) and n_fft > len(volts):
+        caveats.append(
+            f"FFT zero-padded {len(volts)} → {n_fft} samples (next power "
+            f"of 2); frequency resolution "
+            f"{result['freq_resolution_hz']:.6g} Hz."
+        )
+    return {
+        "command": "fft",
+        "source": meta.get("source"),
+        "n_peaks": args.peaks,
+        "result": result,
+        "caveats": caveats,
+    }
+
+
+def run_hist(volts: list[float], meta: dict[str, Any],
+             args: argparse.Namespace) -> dict[str, Any]:
+    result = voltage_histogram(volts, n_bins=args.bins)
+    return {
+        "command": "hist",
+        "source": meta.get("source"),
+        "n_bins": args.bins,
+        "result": result,
+        "caveats": list(meta.get("caveats") or []),
+    }
+
+
+def run_envelope(volts: list[float], meta: dict[str, Any],
+                 args: argparse.Namespace) -> dict[str, Any]:
+    t0_us = float(meta.get("t0_s") or 0.0) * 1e6
+    dt_us = float(meta.get("dt_s") or 0.0) * 1e6
+    result = envelope_downsample(volts, t0_us, dt_us,
+                                 target_points=args.points)
+    return {
+        "command": "envelope",
+        "source": meta.get("source"),
+        "target_points": args.points,
+        "result": result,
+        "caveats": list(meta.get("caveats") or []),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Markdown rendering
 # ---------------------------------------------------------------------------
@@ -350,6 +435,49 @@ def render_markdown(out: dict[str, Any]) -> str:
                 [[r[0], f"0b{r[1]:0{len(out['channel_order_msb_first'])}b}", r[2]]
                  for r in out["bus_runs"]],
             )]
+    elif cmd == "fft":
+        r = out["result"]
+        lines.append(
+            f"Channel `{out['source']}` — top {out['n_peaks']} spectral "
+            f"peaks (Hann-windowed radix-2 FFT, resolution "
+            f"{r['freq_resolution_hz']:.6g} Hz over {r['n_samples']} samples)."
+        )
+        if r["peaks"]:
+            lines += ["", _table(
+                ["freq_hz", "magnitude_db"],
+                [[p["freq_hz"], p["magnitude_db"]] for p in r["peaks"]],
+            )]
+    elif cmd == "hist":
+        r = out["result"]
+        lines.append(
+            f"Channel `{out['source']}` — voltage histogram, "
+            f"{out['n_bins']} bins over "
+            f"[{r['min_v']}, {r['max_v']}] V, {r['n_samples']} samples."
+        )
+        if r["peaks"]:
+            lines += ["", "Dominant level(s) (count > mean + 2σ):", "",
+                      _table(["center_v", "count"],
+                             [[p["center_v"], p["count"]] for p in r["peaks"]])]
+        peak_bins = [b for b in r["bins"] if b["count"]]
+        lines += ["", f"Non-empty bins ({len(peak_bins)}):", "",
+                  _table(["lo_v", "hi_v", "count"],
+                         [[b["lo_v"], b["hi_v"], b["count"]]
+                          for b in peak_bins[:80]])]
+        if len(peak_bins) > 80:
+            lines.append(f"… {len(peak_bins) - 80} more bins truncated")
+    elif cmd == "envelope":
+        r = out["result"]
+        lines.append(
+            f"Channel `{out['source']}` — min/max envelope, {r['n_blocks']} "
+            f"blocks × block_size {r['block_size']} "
+            f"(target {out['target_points']} points)."
+        )
+        lines += ["", _table(
+            ["t_us", "min_v", "max_v"],
+            [[e["t_us"], e["min_v"], e["max_v"]] for e in r["envelope"][:80]],
+        )]
+        if len(r["envelope"]) > 80:
+            lines.append(f"… {len(r['envelope']) - 80} more blocks truncated")
     if out.get("caveats"):
         lines += ["", "## Caveats", ""]
         lines += [f"- {c}" for c in out["caveats"]]
@@ -417,26 +545,56 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--channels", required=True,
                    help="comma-separated, MSB first, e.g. CHAN4,CHAN3,CHAN2,CHAN1")
+
+    p = sub.add_parser(
+        "fft", help="top-N spectral peaks (dump CSV only — needs raw volts)"
+    )
+    p.add_argument("--peaks", type=int, default=5,
+                   help="number of peaks to report (default 5)")
+
+    p = sub.add_parser(
+        "hist", help="voltage histogram / logic-level diagnosis (dump CSV only)"
+    )
+    p.add_argument("--bins", type=int, default=50,
+                   help="histogram bin count (default 50)")
+
+    p = sub.add_parser(
+        "envelope", help="min/max envelope downsample (dump CSV only)"
+    )
+    p.add_argument("--points", type=int, default=200,
+                   help="target envelope blocks (default 200)")
     return parser
+
+
+VOLTS_COMMANDS = ("fft", "hist", "envelope")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        inp = load_input(
-            Path(args.input),
-            threshold_v=args.threshold_v,
-            hysteresis_v=args.hysteresis_v,
-        )
-        runner = {
-            "glitch": run_glitch,
-            "jitter": run_jitter,
-            "pattern": run_pattern,
-            "causality": run_causality,
-            "bus": run_bus,
-        }[args.command]
-        out = runner(inp, args)
+        if args.command in VOLTS_COMMANDS:
+            volts, meta = load_volts(Path(args.input))
+            runner = {
+                "fft": run_fft,
+                "hist": run_hist,
+                "envelope": run_envelope,
+            }[args.command]
+            out = runner(volts, meta, args)
+        else:
+            inp = load_input(
+                Path(args.input),
+                threshold_v=args.threshold_v,
+                hysteresis_v=args.hysteresis_v,
+            )
+            runner = {
+                "glitch": run_glitch,
+                "jitter": run_jitter,
+                "pattern": run_pattern,
+                "causality": run_causality,
+                "bus": run_bus,
+            }[args.command]
+            out = runner(inp, args)
         out["schema"] = SCHEMA_VERSION
     except (OSError, ValueError, KeyError) as e:
         print(f"error: {e}", file=sys.stderr)

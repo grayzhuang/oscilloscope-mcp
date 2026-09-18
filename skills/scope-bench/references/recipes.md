@@ -84,6 +84,18 @@ analyze.py pattern  -i cap.json --pattern 0,1,0,1 --tolerance-us 0.2   # protoco
 Pick `--min-width-us` from the signal's spec (e.g. setup/hold minimum),
 not from what you see. `--md` renders a markdown report instead of JSON.
 
+Volts-domain analysis (dump CSV only — needs the raw samples):
+
+```
+analyze.py fft      -i dump_chan1.csv --peaks 8         # spectral peaks (osc purity, switching noise)
+analyze.py hist     -i dump_chan1.csv --bins 64         # level distribution (floating / bimodal levels)
+analyze.py envelope -i dump_chan1.csv --points 400      # min/max overview of a long capture
+plot.py  wave       -i dump_chan1.csv [dump_chan2.csv]  # PNG with trigger marker (HTML fallback)
+```
+
+FFT caveat: DC offsets leak past the skipped bin 0 — remove the mean
+first (or interpret the low-frequency peaks as leakage, not signal).
+
 ## R6 — Handshake / CDC causality check
 
 Goal: prove "B always answers A within N µs" (req→ack, clock→data…).
@@ -112,6 +124,23 @@ analyze.py bus -i cap.json --channels CHAN4,CHAN3,CHAN2,CHAN1
 `--channels` order is MSB→LSB and defines the packing (`value = Σ
 level_i << (n-1-i)`). Invert the order and every value is garbage —
 double-check against a known state (idle value).
+
+## R7b — Measurement trend over time
+
+Goal: how a quantity drifts (warm-up, supply sag, intermittent fault
+needs a long observation window). Polls scope-side measurements at a
+fixed cadence — no waveform transfer, so intervals stay cheap.
+
+```
+scope_cli.py meas-log --items VPP,FREQUENCY --source CHAN1 \
+    --interval 1 --duration 60        # → data/<model>_measlog_<ts>.csv + stats
+plot.py trend -i data/<model>_measlog_<ts>.csv   # per-item trend PNG
+```
+
+Ctrl+C ends the run early but still prints the summary. Unmeasurable
+samples land as empty cells; per-item stats skip them. An item that
+reads a suspicious constant (e.g. a literal 0 period on some firmware)
+is a firmware quirk — see models.md, don't log it for an hour.
 
 ## R8 — RTL sim vs hardware diff
 

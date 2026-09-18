@@ -43,6 +43,11 @@ If both probe ports answer `*IDN?` on the same host (unusual), set
   on top.
 - Screenshots are **BMP only**. There is no channel-label SCPI;
   screenshot `channel_labels_applied` will be empty by design.
+- **`:MEASure:PERiod? <src>` returns literal `0` on fw 1.2.67** (verified
+  live 2026-09-18; FREQUENCY answers normally). The driver passes the 0
+  through — it is the firmware not reporting, not a real zero period.
+  Derive period as `1 / FREQUENCY`; treat any PERIOD=0.0 from this
+  family as "unmeasurable".
 - ASCII responses end with `\r\n` (handled internally).
 - `FORCE` trigger has no verified SCPI equivalent — use NORMAL/AUTO
   sweep or external trigger instead.

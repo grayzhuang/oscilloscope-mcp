@@ -79,11 +79,15 @@ class _RecordingTransport:
             return "STOP"
         if cmd == ":TRIG:POS?":
             return "0"
+        if cmd == ":GLOBal:RUN:STATe?":   # ZDS run-state node
+            return "Run"
         if cmd == ":TIM:MAIN:SCAL?":
             return "1.000000e-06"
+        if cmd == ":TIMebase:SCALe?":     # ZDS timebase node
+            return "1.000000E-3"
         if cmd.endswith(":DISP?"):
             return "1"
-        if cmd.endswith((":SCAL?", ":OFFS?", ":OFFSet?")):
+        if cmd.endswith((":SCAL?", ":SCALe?", ":OFFS?", ":OFFSet?")):
             return "0.000000e+00"
         return ""
 
@@ -296,3 +300,124 @@ def test_main_doctor_end_to_end(
     out = json.loads(capsys.readouterr().out)
     assert out["model"] == "RIGOL_DS1104Z"
     assert out["saved_to"].endswith(".yaml")
+
+
+# ---------------------------------------------------------------------------
+# meas-log
+# ---------------------------------------------------------------------------
+
+
+def test_meas_log_writes_csv_and_stats(tmp_path: Path) -> None:
+    responses = dict(
+        _RIGOL_FULL,
+        **{
+            # The driver sends RIGOL's long-form source spelling.
+            ":MEAS:ITEM? VPP,CHANnel1": "3.04",
+            ":MEAS:ITEM? FREQuency,CHANnel1": "1000.5",
+        },
+    )
+    drv, _ = _make_rigol(response_map=responses)
+    out = scope_cli.run_meas_log(
+        drv, items=["VPP", "FREQUENCY"], source="CHAN1",
+        interval_s=0.05, duration_s=0.22,
+        host="10.0.0.1", data_dir=tmp_path,
+    )
+    assert out["samples"] >= 3
+    assert out["stats"]["VPP"]["min"] == pytest.approx(3.04)
+    assert out["stats"]["FREQUENCY"]["n"] == out["samples"]
+    csv_path = Path(out["csv"])
+    assert csv_path.exists()
+    lines = csv_path.read_text(encoding="ascii").splitlines()
+    assert lines[0] == "elapsed_s,VPP,FREQUENCY"
+    assert len(lines) == out["samples"] + 1
+    first = lines[1].split(",")
+    assert first[1] == "3.04" and first[2] == "1000.5"
+
+
+def test_meas_log_unmeasurable_becomes_empty_and_none(tmp_path: Path) -> None:
+    responses = dict(
+        _RIGOL_FULL,
+        **{
+            ":MEAS:ITEM? VPP,CHANnel1": "9.9E37",   # sentinel → None
+            ":MEAS:ITEM? FREQuency,CHANnel1": "1000",
+        },
+    )
+    drv, _ = _make_rigol(response_map=responses)
+    out = scope_cli.run_meas_log(
+        drv, items=["VPP", "FREQUENCY"], source="CHAN1",
+        interval_s=0.02, duration_s=0.05,
+        host="10.0.0.1", data_dir=tmp_path,
+    )
+    assert out["stats"]["VPP"] is None
+    assert any("VPP" in c for c in out["caveats"])
+    lines = Path(out["csv"]).read_text(encoding="ascii").splitlines()
+    cells = lines[1].split(",")
+    assert cells[1] == "" and cells[2] == "1000"
+
+
+def test_main_meas_log_invalid_item_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    drv, _ = _make_rigol()
+    monkeypatch.setattr(scope_cli, "open_scope", lambda **kw: drv)
+    rc = scope_cli.main(["meas-log", "--items", "BOGUS",
+                         "--interval", "0.01", "--duration", "0.02",
+                         "--data-dir", str(tmp_path)])
+    assert rc == 2
+    assert "BOGUS" in capsys.readouterr().err
+
+
+def test_meas_log_zds_queries_zds_nodes(tmp_path: Path) -> None:
+    """Same call path on the ZDS driver — this is the model that sits on
+    the bench, so the meas-log mock must cover its SCPI dialect
+    (:MEASure:<ITEM>? <src>, CHANnel<n> source spelling)."""
+    t = _RecordingTransport(response_map={
+        ":MEASure:VPP? CHANnel1": "2.96",
+        ":MEASure:FREQuency? CHANnel1": "999.979",
+    })
+    drv = ZlgZds1000(transport=t, profile=_ZDS_PROFILE)
+    drv.run_status_settle_s = 0
+    out = scope_cli.run_meas_log(
+        drv, items=["VPP", "FREQUENCY"], source="CHAN1",
+        interval_s=0.02, duration_s=0.05,
+        host="192.168.138.14", data_dir=tmp_path,
+    )
+    assert out["schema"] == scope_cli.SCHEMA_VERSION
+    assert out["samples"] >= 2
+    assert out["stats"]["VPP"]["avg"] == pytest.approx(2.96)
+    assert out["stats"]["FREQUENCY"]["max"] == pytest.approx(999.979)
+    assert ":MEASure:VPP? CHANnel1" in t.queries
+    assert ":MEASure:FREQuency? CHANnel1" in t.queries
+
+
+# ---------------------------------------------------------------------------
+# screenshot
+# ---------------------------------------------------------------------------
+
+
+def test_screenshot_rigol_png(tmp_path: Path) -> None:
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    drv, _ = _make_rigol(binary_response=png)
+    out = scope_cli.run_screenshot(drv, host="10.0.0.1", data_dir=tmp_path)
+    path = Path(out["path"])
+    assert path.suffix == ".png"
+    assert path.read_bytes() == png
+    assert out["image_format"] == "PNG"
+    assert out["bytes_written"] == len(png)
+
+
+def test_screenshot_zds_falls_back_to_bmp(tmp_path: Path) -> None:
+    """ZDS ignores the PNG request and returns BMP — the extension must
+    follow the response, not the request."""
+    bmp = b"BM\x36\x00\x00\x00" + b"\x00" * 64
+    t = _RecordingTransport(response_map={
+        "*IDN?": "ZHIYUAN ELECT,ZDS1104,SN,V1.00,1.2.67",
+        ":SYSTem:VERSion?": "1999.0",
+    }, binary_response=bmp)
+    drv = ZlgZds1000(transport=t, profile=_ZDS_PROFILE)
+    drv.run_status_settle_s = 0
+    out = scope_cli.run_screenshot(drv, host="192.168.138.14", data_dir=tmp_path)
+    path = Path(out["path"])
+    assert path.suffix == ".bmp"
+    assert out["image_format"] == "BMP"
+    assert path.read_bytes() == bmp

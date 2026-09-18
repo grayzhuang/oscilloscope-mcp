@@ -248,3 +248,112 @@ def test_main_unknown_channel_fails(capture_file: Path, capsys) -> None:
 def test_main_missing_input_fails(tmp_path: Path, capsys) -> None:
     rc = analyze.main(["-i", str(tmp_path / "nope.json"), "jitter"])
     assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# volts-domain sub-commands (fft / hist / envelope) — dump CSV only
+# ---------------------------------------------------------------------------
+
+
+import math  # noqa: E402
+
+
+@pytest.fixture
+def sine_csv(tmp_path: Path) -> Path:
+    """Pure 1 kHz sine, 0.5 V amplitude, 1024 samples @ 100 kSa/s (no DC
+    offset — a DC offset would leak past the skipped bin 0 and dominate
+    the peak list)."""
+    csv = tmp_path / "sine_chan1.csv"
+    n, dt = 1024, 1e-5
+    rows = ["t_s,volts"]
+    for i in range(n):
+        rows.append(f"{i * dt:.9g},{0.5 * math.sin(2 * math.pi * 1000 * i * dt):.6g}")
+    csv.write_text("\n".join(rows) + "\n", encoding="ascii")
+    (tmp_path / "sine_chan1.meta.json").write_text(json.dumps({
+        "schema": "scope-dump/1", "source": "CHAN1",
+        "n_samples": n, "t0_s": 0.0, "dt_s": dt,
+        "caveats": ["sine fixture caveat"],
+    }), encoding="utf-8")
+    return csv
+
+
+@pytest.fixture
+def bimodal_csv(tmp_path: Path) -> Path:
+    """Digital-ish levels: 401 samples @ 0 V, 200 @ 1.65 V, 399 @ 3.3 V —
+    the odd lengths place both transitions strictly inside an envelope
+    block (block_size 10), so straddling blocks keep both extremes."""
+    csv = tmp_path / "levels_chan1.csv"
+    volts = [0.0] * 401 + [1.65] * 200 + [3.3] * 399
+    rows = ["t_s,volts"]
+    for i, v in enumerate(volts):
+        rows.append(f"{i * 1e-6:.9g},{v:.6g}")
+    csv.write_text("\n".join(rows) + "\n", encoding="ascii")
+    (tmp_path / "levels_chan1.meta.json").write_text(json.dumps({
+        "schema": "scope-dump/1", "source": "CHAN1",
+        "n_samples": len(volts), "t0_s": 0.0, "dt_s": 1e-6, "caveats": [],
+    }), encoding="utf-8")
+    return csv
+
+
+def test_main_fft_finds_tone(sine_csv: Path, capsys) -> None:
+    rc = analyze.main(["-i", str(sine_csv), "fft", "--peaks", "3"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["command"] == "fft"
+    assert out["source"] == "CHAN1"
+    top = out["result"]["peaks"][0]
+    assert 900 <= top["freq_hz"] <= 1100  # the 1 kHz tone
+    assert top["magnitude_db"] == pytest.approx(0.0)  # reference peak
+    assert "sine fixture caveat" in out["caveats"]
+
+
+def test_main_fft_zero_pad_caveat(tmp_path: Path, capsys) -> None:
+    csv = tmp_path / "odd.csv"
+    csv.write_text("t_s,volts\n" +
+                   "".join(f"{i * 1e-5:.9g},{math.sin(i)}\n" for i in range(100)),
+                   encoding="ascii")
+    rc = analyze.main(["-i", str(csv), "fft"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert any("zero-padded 100" in c for c in out["caveats"])
+
+
+def test_main_hist_bimodal_levels(bimodal_csv: Path, capsys) -> None:
+    rc = analyze.main(["-i", str(bimodal_csv), "hist", "--bins", "20"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    r = out["result"]
+    assert r["min_v"] == pytest.approx(0.0)
+    assert r["max_v"] == pytest.approx(3.3)
+    centers = sorted(p["center_v"] for p in r["peaks"])
+    assert len(centers) >= 2
+    assert centers[0] == pytest.approx(0.0, abs=0.5)
+    assert centers[-1] == pytest.approx(3.3, abs=0.5)
+
+
+def test_main_envelope_blocks(bimodal_csv: Path, capsys) -> None:
+    rc = analyze.main(["-i", str(bimodal_csv), "envelope", "--points", "100"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    r = out["result"]
+    assert r["n_blocks"] == 100
+    assert r["block_size"] == 10
+    # Block straddling the 0→1.65 transition keeps both extremes.
+    straddle = [e for e in r["envelope"]
+                if e["min_v"] == pytest.approx(0.0)
+                and e["max_v"] == pytest.approx(1.65)]
+    assert straddle
+
+
+def test_volts_commands_reject_json(capture_file: Path, capsys) -> None:
+    rc = analyze.main(["-i", str(capture_file), "fft"])
+    assert rc == 2
+    assert "dump CSV" in capsys.readouterr().err
+
+
+def test_main_fft_markdown(sine_csv: Path, capsys) -> None:
+    rc = analyze.main(["-i", str(sine_csv), "--md", "fft"])
+    assert rc == 0
+    md = capsys.readouterr().out
+    assert "# scope-bench analyze — fft" in md
+    assert "| freq_hz | magnitude_db |" in md

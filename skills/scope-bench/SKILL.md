@@ -13,8 +13,10 @@ library (`oscilloscope_mcp`):
    `scope_waveform` `scope_acquire` `scope_capture` `scope_compare`
    `scope_viewer` — when a host session has the server registered.
 2. **Scripts** (`scripts/`, run with the dedicated env):
-   `scope_cli.py doctor|dump` (online, file output) and
-   `analyze.py glitch|jitter|pattern|causality|bus` (offline, file input).
+   `scope_cli.py doctor|dump|meas-log|screenshot` (online, file output),
+   `analyze.py glitch|jitter|pattern|causality|bus|fft|hist|envelope`
+   (offline, file input), and `plot.py wave|trend` (offline PNG;
+   matplotlib optional — `wave` falls back to the HTML viewer).
    Run as:
    `conda run -n oscScope-mcp python skills/scope-bench/scripts/<x>.py …`
 
@@ -43,8 +45,11 @@ A number quoted without its caveats is a wrong number.
 | Quick look / few edges / measurements | MCP `scope_capture` / `scope_measure` |
 | Raw voltage array on disk (large captures) | `scope_cli.py dump` |
 | Event statistics (jitter/glitch counts, histograms) | `dump` + `analyze.py` — **not** the MCP waveform stream: it truncates at 400 runs, which silently ruins statistics |
+| Spectral content / logic-level distribution / long-window overview | `dump` + `analyze.py fft\|hist\|envelope` (need raw volts, dump CSV only) |
 | Handshake/CDC "B follows A" check | `scope_capture` both channels → save JSON → `analyze.py causality` |
-| Human-viewable trace | `scope_viewer` (HTML) / `scope_screenshot` |
+| Measurement trend over time (warm-up, stability) | `scope_cli.py meas-log` → `plot.py trend` |
+| Multi-bit bus decode | `scope_capture` (bus_runs) or `analyze.py bus` |
+| Human-viewable trace | `plot.py wave` (PNG) / `scope_viewer` (HTML) / `scope_screenshot` |
 | Sim vs hardware diff | `scope_compare` (offline mode needs no scope) |
 
 ## Parameter rules (apply everywhere)

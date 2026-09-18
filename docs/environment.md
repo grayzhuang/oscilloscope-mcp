@@ -10,6 +10,7 @@
 | 运行时 | mcp | ≥ 1.0, < 2 | MCP SDK（FastMCP、stdio transport），仅 server 层需要 |
 | 运行时 | pyyaml | ≥ 6.0 | 解析 `instruments/profiles/*.yaml` 能力声明 |
 | 开发 | pytest | ≥ 8.0（经 `.[dev]` extra 安装） | 单元测试与真机 conformance |
+| 可选 | matplotlib | ≥ 3.8（经 `.[plot]` extra 安装） | 仅 `skills/scope-bench/scripts/plot.py` 出 PNG 用；缺失时 wave 自动降级为 HTML viewer，仓库核心与 server 保持零第三方绘图依赖 |
 
 依赖面刻意保持很薄：SCPI 传输层（`transport/scpi_lan.py`）是纯标准库的裸 TCP client。**不走 MCP、直接当 Python 库使用（`open_scope()` + `helpers/`）时只需要 pyyaml，不需要 mcp**——适合自动化脚本、CI 硬件在环测试等非 agent 场景。
 

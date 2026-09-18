@@ -1,9 +1,12 @@
 # scope-bench skill 实施计划
 
-> 状态：**P0 已完成（2026-09-18，含真机验证）**——0.1–0.4 离线交付，21 个新增
-> mock/fixture 单测 + 全量 615 通过；0.5 真机 doctor/dump/analyze 闭环 +
-> MCP stdio 工具面冒烟在 ZDS1104（192.168.138.14）全部通过。
-> P1–P3 未开始。
+> 状态：**P0 + P1 已完成（2026-09-18，均含真机验证）**——P0：skill 三份
+> 文案 + scope_cli(doctor/dump) + analyze 五子命令；P1：analyze 增
+> fft/hist/envelope、plot.py（wave/trend，降级 HTML）、scope_cli 增
+> meas-log/screenshot。33 个新增单测、全量 634 通过；ZDS1104 真机验证
+> doctor/dump/dump→分析闭环/MCP stdio 冒烟/meas-log/screenshot(BMP 扩展名
+> 跟随响应)/plot PNG 全部通过。matplotlib 以可选依赖组 `.[plot]` 声明。
+> P2–P3 未开始。
 > 放置决策：开发期随仓库 `skills/scope-bench/`；发布后迁移至个人 skill 目录并经
 > skill-lock 登记来源。
 > 执行入口：对 agent 说"执行 P0"即从任务 0.1 开始，按编号推进。

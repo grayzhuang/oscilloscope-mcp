@@ -19,6 +19,14 @@ dump     Read raw per-channel voltages into
          plus a sibling ``.meta.json`` (t0/dt/n/scale/offset/caveats).
          ``--mode RAW`` reads full acquisition memory; the driver raises
          if the scope is not stopped first.
+meas-log Poll ``scope.measure`` on a fixed interval and append each
+         sample to ``data/<model>_measlog_<ts>.csv``
+         (``elapsed_s,<item>,…``), then print per-item min/max/avg/σ.
+         Ctrl+C ends the run gracefully and still prints the summary.
+         Feed the CSV to ``plot.py trend`` for a PNG.
+screenshot Save the current screen to ``data/<model>_screenshot_<ts>.<ext>``
+         — the extension follows the format the instrument actually
+         returned (``image_format``), not the request.
 
 Connection defaults come from ``SCOPE_MCP_HOST`` / ``SCOPE_MCP_PORT`` /
 ``SCOPE_MCP_MODEL``; output directory from ``--data-dir`` or
@@ -32,7 +40,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import sys
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -40,9 +50,13 @@ from typing import Any
 
 import yaml
 
-from oscilloscope_mcp.helpers.caveat_calc import compute_caveats
+from oscilloscope_mcp.helpers import measure as meas_helper
+from oscilloscope_mcp.helpers.caveat_calc import (
+    caveat_for_unmeasurable_items,
+    compute_caveats,
+)
 from oscilloscope_mcp.instruments import ScopeDispatchError, open_scope
-from oscilloscope_mcp.instruments._base import Scope, Waveform
+from oscilloscope_mcp.instruments._base import Scope, ScreenshotPlan, Waveform
 from oscilloscope_mcp.transport.scpi_lan import ScpiError
 
 SCHEMA_VERSION = "scope-cli/1"
@@ -269,6 +283,125 @@ def run_dump(
 
 
 # ---------------------------------------------------------------------------
+# meas-log
+# ---------------------------------------------------------------------------
+
+
+def run_meas_log(
+    scope: Scope,
+    *,
+    items: list[str],
+    source: str,
+    interval_s: float,
+    duration_s: float,
+    host: str,
+    data_dir: Path,
+) -> dict[str, Any]:
+    """Poll ``scope.measure`` on a fixed cadence into one CSV.
+
+    Timing anchors on the loop start (not the previous sample), so slow
+    queries shift the phase but don't drift the schedule. A query value
+    the scope can't measure lands as an empty cell (→ None downstream),
+    keeping row/column alignment for ``plot.py trend``.
+    """
+    if interval_s <= 0:
+        raise ValueError(f"--interval must be > 0, got {interval_s}")
+    if duration_s <= 0:
+        raise ValueError(f"--duration must be > 0, got {duration_s}")
+    # Validate items + source before the first instrument read.
+    resolved = meas_helper.resolve_items(scope.profile, items)
+    norm_source = meas_helper.normalize_source(scope.profile, source)
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = data_dir / f"{_model_stem(scope)}_measlog_{_timestamp()}.csv"
+    start = time.monotonic()
+    rows: list[list[float | None]] = []  # [elapsed, item1, item2, …]
+
+    try:
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed >= duration_s:
+                break
+            meas = scope.measure(items, source=norm_source)
+            row: list[float | None] = [elapsed]
+            row.extend(meas.get(name) for name in items)
+            rows.append(row)
+            next_at = (len(rows)) * interval_s
+            remain = next_at - (time.monotonic() - start)
+            if remain > 0:
+                time.sleep(remain)
+    except KeyboardInterrupt:
+        pass  # Ctrl+C: end early, still produce the summary below
+
+    with csv_path.open("w", encoding="ascii", newline="\n") as f:
+        f.write("elapsed_s," + ",".join(items) + "\n")
+        for row in rows:
+            cells = [f"{row[0]:.6g}"] + [
+                "" if v is None else f"{v:.9g}" for v in row[1:]
+            ]
+            f.write(",".join(cells) + "\n")
+
+    stats: dict[str, Any] = {}
+    unmeasurable_last: list[str] = []
+    for idx, name in enumerate(items):
+        vals = [r[idx + 1] for r in rows if r[idx + 1] is not None]
+        if vals:
+            stats[name] = {
+                "n": len(vals),
+                "min": min(vals),
+                "max": max(vals),
+                "avg": statistics.fmean(vals),
+                "stddev": statistics.pstdev(vals) if len(vals) > 1 else 0.0,
+            }
+        else:
+            stats[name] = None
+            unmeasurable_last.append(name)
+
+    caveats = compute_caveats(
+        scope.profile,
+        active_channel_count=scope.active_channel_count(),
+        timebase_s_per_div=scope.timebase_s_per_div(),
+    )
+    caveats.extend(caveat_for_unmeasurable_items(unmeasurable_last))
+    return {
+        "schema": SCHEMA_VERSION,
+        "source": norm_source,
+        "items": items,
+        "csv": str(csv_path),
+        "samples": len(rows),
+        "interval_s": interval_s,
+        "duration_s": duration_s,
+        "stats": stats,
+        "caveats": caveats,
+    }
+
+
+# ---------------------------------------------------------------------------
+# screenshot
+# ---------------------------------------------------------------------------
+
+
+def run_screenshot(
+    scope: Scope, *, host: str, data_dir: Path
+) -> dict[str, Any]:
+    """Dump the screen un-annotated; the extension follows the format
+    the instrument actually returned (some families ignore the request
+    and always emit one format)."""
+    result = scope.screenshot(ScreenshotPlan())
+    ext = (result.image_format or "PNG").strip().lower()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / f"{_model_stem(scope)}_screenshot_{_timestamp()}.{ext}"
+    path.write_bytes(result.image_bytes)
+    return {
+        "schema": SCHEMA_VERSION,
+        "path": str(path),
+        "bytes_written": len(result.image_bytes),
+        "image_format": result.image_format,
+        "caveats": [],
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI assembly
 # ---------------------------------------------------------------------------
 
@@ -338,6 +471,43 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode", default="NORMal",
         help="waveform read mode: NORMal or RAW (default NORMal)",
     )
+
+    p_meas = sub.add_parser(
+        "meas-log",
+        help="poll measurements on an interval → CSV + per-item statistics",
+        description=(
+            "Repeatedly reads scope-side measurements and appends them to "
+            "data/<model>_measlog_<ts>.csv (elapsed_s,item1,item2,…), then "
+            "prints min/max/avg/stddev per item. Ctrl+C ends the run early "
+            "and still prints the summary. The CSV feeds plot.py trend."
+        ),
+    )
+    _common_args(p_meas)
+    p_meas.add_argument(
+        "--items", required=True,
+        help="comma-separated canonical items, e.g. VPP,FREQUENCY",
+    )
+    p_meas.add_argument("--source", default="CHAN1", help="source channel")
+    p_meas.add_argument(
+        "--interval", type=float, default=1.0, help="poll interval (s)"
+    )
+    p_meas.add_argument(
+        "--duration", type=float, default=10.0,
+        help="total logging duration (s)",
+    )
+
+    p_shot = sub.add_parser(
+        "screenshot",
+        help="save the current screen (extension follows image_format)",
+        description=(
+            "Saves the current screen image to "
+            "data/<model>_screenshot_<ts>.<ext>. The extension follows the "
+            "format the instrument returned in its response, not the "
+            "request. For annotated screenshots (cursors, channel labels) "
+            "use the MCP scope_screenshot tool instead."
+        ),
+    )
+    _common_args(p_shot)
     return parser
 
 
@@ -362,6 +532,18 @@ def main(argv: list[str] | None = None) -> int:
             out = run_doctor(
                 scope, host=host_used, save=args.save, data_dir=data_dir
             )
+        elif args.command == "meas-log":
+            out = run_meas_log(
+                scope,
+                items=[i.strip() for i in args.items.split(",") if i.strip()],
+                source=args.source,
+                interval_s=args.interval,
+                duration_s=args.duration,
+                host=host_used,
+                data_dir=data_dir,
+            )
+        elif args.command == "screenshot":
+            out = run_screenshot(scope, host=host_used, data_dir=data_dir)
         else:
             out = run_dump(
                 scope,
@@ -380,6 +562,11 @@ def main(argv: list[str] | None = None) -> int:
         # Driver-enforced preconditions, e.g. RAW dump while still running.
         print(f"error: {e}", file=sys.stderr)
         return 1
+    except ValueError as e:
+        # Profile validation (bad item name / channel / param) — the
+        # validation helpers list the legal values in the message.
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     print(json.dumps(out, indent=2))
     return 0
