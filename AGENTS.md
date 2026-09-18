@@ -37,6 +37,12 @@ src/oscilloscope_mcp/
                          #   reference_diff/caveat_calc…），不碰 I/O，可无硬件单测
 ```
 
+`skills/scope-bench/` — agent 流程知识层（SKILL.md + recipes/models 参考 +
+scope_cli/analyze 等脚本）：脚本一律调库走 MCP 同一校验路径，不自行拼
+SCPI；机型差异只收在 `references/models.md`，SKILL.md 主体与脚本不出现
+机型名；单测在 `tests/test_scope_cli.py`、`tests/test_analyze.py`（mock
+传输层，无硬件）。实施计划见 `docs/scope-bench-plan.md`。
+
 编辑规则：
 
 - **能力是数据不是代码**：仪器支持什么由 profile YAML 声明；参数在发到硬件前校验，非法设置直接拒绝并给出合法值列表。
